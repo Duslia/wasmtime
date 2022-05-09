@@ -114,6 +114,9 @@ mod value_label;
 #[cfg(feature = "souper-harvest")]
 mod souper_harvest;
 
+#[cfg(feature = "incremental-cache")]
+mod incremental_cache;
+
 pub use crate::result::{CodegenError, CodegenResult};
 
 /// Even when trace logging is disabled, the trace macro has a significant performance cost so we

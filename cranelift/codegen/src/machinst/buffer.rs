@@ -233,19 +233,19 @@ pub struct MachBuffer<I: VCodeInst> {
 /// without fixups. This allows the type to be independent of the backend.
 pub struct MachBufferFinalized {
     /// The buffer contents, as raw bytes.
-    data: SmallVec<[u8; 1024]>,
+    pub(crate) data: SmallVec<[u8; 1024]>,
     /// Any relocations referring to this code. Note that only *external*
     /// relocations are tracked here; references to labels within the buffer are
     /// resolved before emission.
-    relocs: SmallVec<[MachReloc; 16]>,
+    pub(crate) relocs: SmallVec<[MachReloc; 16]>,
     /// Any trap records referring to this code.
-    traps: SmallVec<[MachTrap; 16]>,
+    pub(crate) traps: SmallVec<[MachTrap; 16]>,
     /// Any call site records referring to this code.
-    call_sites: SmallVec<[MachCallSite; 16]>,
+    pub(crate) call_sites: SmallVec<[MachCallSite; 16]>,
     /// Any source location mappings referring to this code.
-    srclocs: SmallVec<[MachSrcLoc; 64]>,
+    pub(crate) srclocs: SmallVec<[MachSrcLoc; 64]>,
     /// Any stack maps referring to this code.
-    stack_maps: SmallVec<[MachStackMap; 8]>,
+    pub(crate) stack_maps: SmallVec<[MachStackMap; 8]>,
     /// Any unwind info at a given location.
     pub unwind_info: SmallVec<[(CodeOffset, UnwindInst); 8]>,
 }
@@ -1481,6 +1481,7 @@ pub struct MachSrcLoc {
 
 /// Record of stack map metadata: stack offsets containing references.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "enable-serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MachStackMap {
     /// The code offset at which this stack map applies.
     pub offset: CodeOffset,

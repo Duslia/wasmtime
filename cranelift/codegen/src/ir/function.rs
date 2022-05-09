@@ -60,7 +60,6 @@ impl<'de> Deserialize<'de> for VersionMarker {
     }
 }
 
-///
 /// Functions can be cloned, but it is not a very fast operation.
 /// The clone will have all the same entity numbers as the original.
 #[derive(Clone)]

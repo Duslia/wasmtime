@@ -55,6 +55,27 @@ pub struct Context {
 
     /// Flag: do we want a disassembly with the MachCompileResult?
     pub want_disasm: bool,
+
+    stats: Stats,
+}
+
+#[derive(Default)]
+struct Stats {
+    num_lookups: usize,
+    num_hits: usize,
+    num_cached: usize,
+}
+
+impl Drop for Stats {
+    fn drop(&mut self) {
+        eprintln!(
+            "stats: {}/{} = {}% (hits/lookup)\ncached: {}",
+            self.num_hits,
+            self.num_lookups,
+            (self.num_hits as f32) / (self.num_lookups as f32) * 100.0,
+            self.num_cached
+        )
+    }
 }
 
 impl Context {
@@ -78,6 +99,7 @@ impl Context {
             loop_analysis: LoopAnalysis::new(),
             mach_compile_result: None,
             want_disasm: false,
+            stats: Default::default(),
         }
     }
 
@@ -130,6 +152,24 @@ impl Context {
     /// Returns information about the function's code and read-only data.
     pub fn compile(&mut self, isa: &dyn TargetIsa) -> CodegenResult<CodeInfo> {
         let _tt = timing::compile();
+
+        let cache_store = crate::incremental_cache::TmpFileCacheStore;
+
+        #[cfg(feature = "incremental-cache")]
+        let cache_input = {
+            let _tt = timing::try_incremental_cache();
+            self.stats.num_lookups += 1;
+            match crate::incremental_cache::try_load(&cache_store, &mut self.func) {
+                Ok(mach_compile_result) => {
+                    let info = mach_compile_result.code_info();
+                    self.mach_compile_result = Some(mach_compile_result);
+                    self.stats.num_hits += 1;
+                    return Ok(info);
+                }
+                Err(cache_input) => cache_input,
+            }
+        };
+
         self.verify_if(isa)?;
 
         let opt_level = isa.flags().opt_level();
@@ -169,6 +209,17 @@ impl Context {
         }
 
         let result = isa.compile_function(&self.func, self.want_disasm)?;
+
+        #[cfg(feature = "incremental-cache")]
+        let result = {
+            let _tt = timing::store_incremental_cache();
+            let cached = crate::incremental_cache::store(&cache_store, cache_input, &result);
+            if cached {
+                self.stats.num_cached += 1;
+            }
+            result
+        };
+
         let info = result.code_info();
         self.mach_compile_result = Some(result);
         Ok(info)
