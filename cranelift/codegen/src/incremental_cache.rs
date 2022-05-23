@@ -3,9 +3,9 @@ use smallvec::SmallVec;
 
 use crate::alloc::string::String;
 use crate::alloc::vec::Vec;
-use crate::binemit::{CodeOffset, Reloc};
-use crate::ir::{Function, Inst, Opcode, SourceLoc, StackSlot, TrapCode};
-use crate::machinst::isle::{ExternalName, UnwindInst};
+use crate::binemit::CodeOffset;
+use crate::ir::{Function, Inst, SourceLoc, StackSlot};
+use crate::machinst::isle::UnwindInst;
 use crate::machinst::{MachBufferFinalized, MachCompileResult};
 use crate::{MachCallSite, MachReloc, MachSrcLoc, MachStackMap, MachTrap, ValueLabelsRanges};
 use cranelift_entity::EntityRef as _;
@@ -69,87 +69,6 @@ impl RelSourceLoc {
 // Copies of data structures that use `RelSourceLoc` instead of `SourceLoc`.
 
 #[derive(serde::Serialize, serde::Deserialize)]
-struct CacheableMachReloc {
-    offset: CodeOffset,
-    srcloc: RelSourceLoc,
-    kind: Reloc,
-    name: ExternalName,
-    addend: i64,
-}
-
-impl CacheableMachReloc {
-    fn new(reloc: &MachReloc, offset: SourceLoc) -> Self {
-        Self {
-            offset: reloc.offset,
-            srcloc: RelSourceLoc::new(reloc.srcloc, offset),
-            kind: reloc.kind,
-            name: reloc.name.clone(),
-            addend: reloc.addend,
-        }
-    }
-
-    fn expand(self, offset: SourceLoc) -> MachReloc {
-        MachReloc {
-            offset: self.offset,
-            srcloc: self.srcloc.expand(offset),
-            kind: self.kind,
-            name: self.name.clone(),
-            addend: self.addend,
-        }
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct CacheableMachTrap {
-    offset: CodeOffset,
-    srcloc: RelSourceLoc,
-    code: TrapCode,
-}
-
-impl CacheableMachTrap {
-    fn new(trap: &MachTrap, offset: SourceLoc) -> Self {
-        Self {
-            offset: trap.offset,
-            srcloc: RelSourceLoc::new(trap.srcloc, offset),
-            code: trap.code,
-        }
-    }
-
-    fn expand(self, offset: SourceLoc) -> MachTrap {
-        MachTrap {
-            offset: self.offset,
-            srcloc: self.srcloc.expand(offset),
-            code: self.code,
-        }
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct CacheableMachCallSite {
-    ret_addr: CodeOffset,
-    srcloc: RelSourceLoc,
-    opcode: Opcode,
-}
-
-impl CacheableMachCallSite {
-    fn new(cs: &MachCallSite, offset: SourceLoc) -> Self {
-        Self {
-            ret_addr: cs.ret_addr,
-            srcloc: RelSourceLoc::new(cs.srcloc, offset),
-            opcode: cs.opcode,
-        }
-    }
-
-    fn expand(self, offset: SourceLoc) -> MachCallSite {
-        MachCallSite {
-            ret_addr: self.ret_addr,
-            srcloc: self.srcloc.expand(offset),
-            opcode: self.opcode,
-        }
-    }
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
 pub struct CacheableMachSrcLoc {
     start: CodeOffset,
     end: CodeOffset,
@@ -174,12 +93,15 @@ impl CacheableMachSrcLoc {
     }
 }
 
+// --
+// Our final data structure.
+
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CacheableMachBufferFinalized {
     data: SmallVec<[u8; 1024]>,
-    relocs: SmallVec<[CacheableMachReloc; 16]>,
-    traps: SmallVec<[CacheableMachTrap; 16]>,
-    call_sites: SmallVec<[CacheableMachCallSite; 16]>,
+    relocs: SmallVec<[MachReloc; 16]>,
+    traps: SmallVec<[MachTrap; 16]>,
+    call_sites: SmallVec<[MachCallSite; 16]>,
     srclocs: SmallVec<[CacheableMachSrcLoc; 64]>,
     stack_maps: SmallVec<[MachStackMap; 8]>,
     unwind_info: SmallVec<[(CodeOffset, UnwindInst); 8]>,
@@ -189,21 +111,9 @@ impl CacheableMachBufferFinalized {
     fn new(mbf: &MachBufferFinalized, offset: SourceLoc) -> Self {
         Self {
             data: mbf.data.clone(),
-            relocs: mbf
-                .relocs()
-                .iter()
-                .map(|r| CacheableMachReloc::new(r, offset))
-                .collect(),
-            traps: mbf
-                .traps()
-                .iter()
-                .map(|t| CacheableMachTrap::new(t, offset))
-                .collect(),
-            call_sites: mbf
-                .call_sites()
-                .iter()
-                .map(|cs| CacheableMachCallSite::new(cs, offset))
-                .collect(),
+            relocs: mbf.relocs().into_iter().cloned().collect(),
+            traps: mbf.traps().into_iter().cloned().collect(),
+            call_sites: mbf.call_sites().into_iter().cloned().collect(),
             srclocs: mbf
                 .get_srclocs_sorted()
                 .iter()
@@ -217,13 +127,9 @@ impl CacheableMachBufferFinalized {
     fn expand(self, offset: SourceLoc) -> MachBufferFinalized {
         MachBufferFinalized {
             data: self.data,
-            relocs: self.relocs.into_iter().map(|r| r.expand(offset)).collect(),
-            traps: self.traps.into_iter().map(|t| t.expand(offset)).collect(),
-            call_sites: self
-                .call_sites
-                .into_iter()
-                .map(|cs| cs.expand(offset))
-                .collect(),
+            relocs: self.relocs,
+            traps: self.traps,
+            call_sites: self.call_sites,
             srclocs: self
                 .srclocs
                 .into_iter()

@@ -1433,6 +1433,7 @@ struct MachLabelFixup<I: VCodeInst> {
 
 /// A relocation resulting from a compilation.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "enable-serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MachReloc {
     /// The offset at which the relocation applies, *relative to the
     /// containing section*.
@@ -1447,6 +1448,7 @@ pub struct MachReloc {
 
 /// A trap record resulting from a compilation.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "enable-serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MachTrap {
     /// The offset at which the trap instruction occurs, *relative to the
     /// containing section*.
@@ -1457,6 +1459,7 @@ pub struct MachTrap {
 
 /// A call site record resulting from a compilation.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "enable-serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MachCallSite {
     /// The offset of the call's return address, *relative to the containing section*.
     pub ret_addr: CodeOffset,
