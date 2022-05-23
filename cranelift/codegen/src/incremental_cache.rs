@@ -1,14 +1,14 @@
-use cranelift_entity::PrimaryMap;
-use smallvec::SmallVec;
-
 use crate::alloc::string::String;
 use crate::alloc::vec::Vec;
 use crate::binemit::CodeOffset;
-use crate::ir::{Function, Inst, SourceLoc, StackSlot};
+use crate::ir::{ExternalName, Function, Inst, SourceLoc, StackSlot};
 use crate::machinst::isle::UnwindInst;
 use crate::machinst::{MachBufferFinalized, MachCompileResult};
+use crate::HashMap;
 use crate::{MachCallSite, MachReloc, MachSrcLoc, MachStackMap, MachTrap, ValueLabelsRanges};
 use cranelift_entity::EntityRef as _;
+use cranelift_entity::PrimaryMap;
+use smallvec::SmallVec;
 
 pub struct CacheKey(u64);
 
@@ -47,6 +47,7 @@ pub(crate) struct CacheInput {
     src: String,
     key: CacheKey,
     srcloc_offset: SourceLoc,
+    external_names: Vec<ExtName>,
 }
 
 /// Relative source location.
@@ -142,6 +143,12 @@ impl CacheableMachBufferFinalized {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
+struct ExtName {
+    namespace: u32,
+    index: u32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
 struct CacheableMachCompileResult {
     buffer: CacheableMachBufferFinalized,
     frame_size: u32,
@@ -150,10 +157,11 @@ struct CacheableMachCompileResult {
     stackslot_offsets: PrimaryMap<StackSlot, u32>,
     bb_starts: Vec<CodeOffset>,
     bb_edges: Vec<(CodeOffset, CodeOffset)>,
+    external_names: Vec<ExtName>,
 }
 
 impl CacheableMachCompileResult {
-    fn new(mcr: &MachCompileResult, offset: SourceLoc) -> Self {
+    fn new(mcr: &MachCompileResult, external_names: Vec<ExtName>, offset: SourceLoc) -> Self {
         Self {
             buffer: CacheableMachBufferFinalized::new(&mcr.buffer, offset),
             frame_size: mcr.frame_size,
@@ -162,12 +170,44 @@ impl CacheableMachCompileResult {
             stackslot_offsets: mcr.stackslot_offsets.clone(),
             bb_starts: mcr.bb_starts.clone(),
             bb_edges: mcr.bb_edges.clone(),
+            external_names,
         }
     }
 
-    fn expand(self, offset: SourceLoc) -> MachCompileResult {
+    fn expand(self, offset: SourceLoc, external_names: Vec<ExtName>) -> MachCompileResult {
+        let mut buffer = self.buffer.expand(offset);
+
+        // Construct a mapping from compiled- to restored- external names.
+        let mut map = HashMap::new();
+
+        assert_eq!(external_names.len(), self.external_names.len());
+        for (prev, after) in self.external_names.into_iter().zip(external_names) {
+            if map.insert((prev.namespace, prev.index), after).is_some() {
+                panic!(
+                    "duplicate entry in prev->new namespace for {};{}",
+                    prev.namespace, prev.index
+                );
+            }
+        }
+
+        // Adjust external names in relocations.
+        for reloc in buffer.relocs.iter_mut() {
+            if let ExternalName::User {
+                ref mut namespace,
+                ref mut index,
+            } = reloc.name
+            {
+                if let Some(after) = map.get(&(*namespace, *index)) {
+                    *namespace = after.namespace;
+                    *index = after.index;
+                } else {
+                    panic!("didn't find previous mention of {};{}", namespace, index);
+                }
+            }
+        }
+
         MachCompileResult {
-            buffer: self.buffer.expand(offset),
+            buffer,
             frame_size: self.frame_size,
             disasm: self.disasm,
             value_labels_ranges: self.value_labels_ranges,
@@ -187,14 +227,50 @@ pub(crate) fn try_load(
     func: &mut Function,
 ) -> Result<MachCompileResult, CacheInput> {
     // Use the input string as the cache key.
-    //
+    // TODO: hash something custom
+
     // Temporarily remove source locations as they're very likely to change in every single
     // function.
-
     let annotations = std::mem::take(&mut func.srclocs);
+
+    // Temporarily remove any `ExternalName` that's called through a `call` (or equivalent) opcode:
+    // - TODO in ExtFuncData (in func.dfg.ext_funcs)
+    let external_names = {
+        let mut names = Vec::with_capacity(func.dfg.ext_funcs.len()); // likely a short overestimate, but fine
+        for func in func.dfg.ext_funcs.values_mut() {
+            if let ExternalName::User {
+                ref mut namespace,
+                ref mut index,
+            } = func.name
+            {
+                names.push(ExtName {
+                    namespace: *namespace,
+                    index: *index,
+                });
+                *namespace = 0;
+                *index = 0;
+            }
+        }
+        names
+    };
+
     use crate::alloc::string::ToString;
     let src = func.to_string();
+
+    // Restore source locations.
     func.srclocs = annotations;
+
+    // Restore function names.
+    for (func, original_name) in func.dfg.ext_funcs.values_mut().zip(&external_names) {
+        if let ExternalName::User {
+            ref mut namespace,
+            ref mut index,
+        } = func.name
+        {
+            *namespace = original_name.namespace;
+            *index = original_name.index;
+        }
+    }
 
     let hash = {
         use core::hash::{Hash as _, Hasher as _};
@@ -212,8 +288,12 @@ pub(crate) fn try_load(
     if let Some(bytes) = cache_store.get(CacheKey(hash)) {
         match bincode::deserialize::<CachedFunc>(bytes.as_slice()) {
             Ok(result) => {
-                if src == result.src {
-                    return Ok(result.compile_result.expand(srcloc_offset));
+                if src == result.src
+                    && external_names.len() == result.compile_result.external_names.len()
+                {
+                    let mach_compile_result =
+                        result.compile_result.expand(srcloc_offset, external_names);
+                    return Ok(mach_compile_result);
                 }
             }
             Err(err) => {
@@ -226,6 +306,7 @@ pub(crate) fn try_load(
         src,
         key: CacheKey(hash),
         srcloc_offset,
+        external_names,
     })
 }
 
@@ -237,7 +318,11 @@ pub(crate) fn store(
 ) -> bool {
     let cached = CachedFunc {
         src: input.src,
-        compile_result: CacheableMachCompileResult::new(result, input.srcloc_offset),
+        compile_result: CacheableMachCompileResult::new(
+            result,
+            input.external_names,
+            input.srcloc_offset,
+        ),
     };
     let mut did_cache = false;
     if let Ok(bytes) = bincode::serialize(&cached) {

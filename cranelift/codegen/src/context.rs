@@ -56,17 +56,25 @@ pub struct Context {
     /// Flag: do we want a disassembly with the MachCompileResult?
     pub want_disasm: bool,
 
-    stats: Stats,
+    stats: IncrementalCacheStats,
 }
 
 #[derive(Default)]
-struct Stats {
+struct IncrementalCacheStats {
     num_lookups: usize,
     num_hits: usize,
     num_cached: usize,
 }
 
-impl Drop for Stats {
+impl IncrementalCacheStats {
+    pub fn fuse(&mut self, other: IncrementalCacheStats) {
+        self.num_lookups += other.num_lookups;
+        self.num_hits += other.num_hits;
+        self.num_cached += other.num_cached;
+    }
+}
+
+impl Drop for IncrementalCacheStats {
     fn drop(&mut self) {
         eprintln!(
             "stats: {}/{} = {}% (hits/lookup)\ncached: {}",
