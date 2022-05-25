@@ -10,8 +10,8 @@ use anyhow::{Context as _, Result};
 use cranelift_codegen::ir::{self, ExternalName, InstBuilder, MemFlags, Value};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::print_errors::pretty_error;
-use cranelift_codegen::Context;
 use cranelift_codegen::{settings, MachReloc, MachTrap};
+use cranelift_codegen::{Context, IncrementalCacheStats};
 use cranelift_codegen::{MachSrcLoc, MachStackMap};
 use cranelift_entity::{EntityRef, PrimaryMap};
 use cranelift_frontend::FunctionBuilder;
@@ -127,6 +127,15 @@ impl Compiler {
 }
 
 impl wasmtime_environ::Compiler for Compiler {
+    fn print_stats(&self) {
+        let mut stats = IncrementalCacheStats::default();
+        let guard = self.contexts.lock().unwrap();
+        for ctx in &*guard {
+            stats.fuse(&ctx.codegen_context.stats);
+        }
+        stats.print();
+    }
+
     fn compile_function(
         &self,
         translation: &ModuleTranslation<'_>,

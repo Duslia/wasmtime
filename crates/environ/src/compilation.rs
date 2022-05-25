@@ -155,6 +155,9 @@ pub trait Compiler: Send + Sync {
         ty: &WasmFuncType,
     ) -> Result<Box<dyn Any + Send>, CompileError>;
 
+    /// TODO
+    fn print_stats(&self) {}
+
     /// Collects the results of compilation into an in-memory object.
     ///
     /// This function will receive the same `Box<dyn Ayn>` produced as part of

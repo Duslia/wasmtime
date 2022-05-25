@@ -59,10 +59,18 @@ struct RelSourceLoc(u32);
 
 impl RelSourceLoc {
     fn new(loc: SourceLoc, offset: SourceLoc) -> Self {
-        Self(loc.bits() - offset.bits())
+        if loc.is_default() {
+            Self(loc.bits())
+        } else {
+            Self(loc.bits() - offset.bits())
+        }
     }
     fn expand(&self, offset: SourceLoc) -> SourceLoc {
-        SourceLoc::new(self.0 + offset.bits())
+        if SourceLoc::new(self.0).is_default() || offset.is_default() {
+            SourceLoc::default()
+        } else {
+            SourceLoc::new(self.0 + offset.bits())
+        }
     }
 }
 
@@ -233,6 +241,19 @@ pub(crate) fn try_load(
     // function.
     let annotations = std::mem::take(&mut func.srclocs);
 
+    let name = if let ExternalName::User {
+        ref mut namespace,
+        ref mut index,
+    } = &mut func.name
+    {
+        let res = Some((*namespace, *index));
+        *namespace = 0;
+        *index = 0;
+        res
+    } else {
+        None
+    };
+
     // Temporarily remove any `ExternalName` that's called through a `call` (or equivalent) opcode:
     // - TODO in ExtFuncData (in func.dfg.ext_funcs)
     let external_names = {
@@ -259,6 +280,11 @@ pub(crate) fn try_load(
 
     // Restore source locations.
     func.srclocs = annotations;
+
+    // Restore function name.
+    if let Some((namespace, index)) = name {
+        func.name = ExternalName::User { namespace, index };
+    }
 
     // Restore function names.
     for (func, original_name) in func.dfg.ext_funcs.values_mut().zip(&external_names) {
