@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 
 /// A version marker used to ensure that serialized clif ir is never deserialized with a
 /// different version of Cranelift.
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Hash)]
 pub struct VersionMarker;
 
 #[cfg(feature = "enable-serde")]

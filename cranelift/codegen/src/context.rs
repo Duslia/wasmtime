@@ -81,7 +81,8 @@ impl IncrementalCacheStats {
     pub fn print(&mut self) {
         self.printed = true;
         eprintln!(
-            "stats: {}/{} = {}% (hits/lookup)\ncached: {}",
+            //log::debug!(
+            "Incremental compilation cache stats: {}/{} = {}% (hits/lookup)\ncached: {}",
             self.num_hits,
             self.num_lookups,
             (self.num_hits as f32) / (self.num_lookups as f32) * 100.0,
@@ -92,14 +93,6 @@ impl IncrementalCacheStats {
         self.num_cached = 0;
     }
 }
-
-//impl Drop for IncrementalCacheStats {
-//fn drop(&mut self) {
-//if !self.printed {
-//self.print();
-//}
-//}
-//}
 
 impl Context {
     /// Allocate a new compilation context.

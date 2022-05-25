@@ -25,7 +25,7 @@ use core::iter::{IntoIterator, Iterator};
 /// While data dependencies are not recorded, instruction ordering does affect control
 /// dependencies, so part of the semantics of the program are determined by the layout.
 ///
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 pub struct Layout {
     /// Linked list nodes for the layout order of blocks Forms a doubly linked list, terminated in
     /// both ends by `None`.
@@ -486,7 +486,7 @@ impl Layout {
 
 /// A single node in the linked-list of blocks.
 // Whenever you add new fields here, don't forget to update the custom serializer for `Layout` too.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Hash)]
 struct BlockNode {
     prev: PackedOption<Block>,
     next: PackedOption<Block>,
@@ -748,7 +748,7 @@ impl Layout {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Hash)]
 struct InstNode {
     /// The Block containing this instruction, or `None` if the instruction is not yet inserted.
     block: PackedOption<Block>,
