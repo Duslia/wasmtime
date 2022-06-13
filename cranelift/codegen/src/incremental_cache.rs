@@ -7,7 +7,7 @@ use crate::ir::instructions::InstructionData;
 use crate::ir::{
     self, Block, Constant, ConstantData, ExternalName, FuncRef, Function, Immediate, Inst,
     JumpTables, Layout, LibCall, SigRef, Signature, SourceLoc, StackSlot, StackSlots, Value,
-    ValueLabel, ValueLabelAssignments, ValueList, ValueListPool, TESTCASE_NAME_LENGTH,
+    ValueLabel, ValueLabelAssignments, TESTCASE_NAME_LENGTH,
 };
 use crate::machinst::isle::UnwindInst;
 use crate::machinst::{MachBufferFinalized, MachCompileResult};
@@ -94,9 +94,8 @@ struct CachedDataFlowGraph {
     // Those fields are the same as in DataFlowGraph
     // --
     insts: PrimaryMap<Inst, InstructionData>,
-    results: SecondaryMap<Inst, ValueList>,
+    results: SecondaryMap<Inst, Vec<Value>>,
     blocks: PrimaryMap<Block, BlockData>,
-    value_lists: ValueListPool,
     values: PrimaryMap<Value, ValueData>,
     signatures: PrimaryMap<SigRef, Signature>,
     old_signatures: SecondaryMap<SigRef, Option<Signature>>,
@@ -184,11 +183,16 @@ impl CacheKey {
             })
             .collect();
 
+        let mut results = SecondaryMap::with_capacity(f.dfg.results.capacity());
+        let value_list = &f.dfg.value_lists;
+        for (inst, values) in f.dfg.results.iter() {
+            results[inst] = values.as_slice(value_list).to_vec();
+        }
+
         let dfg = CachedDataFlowGraph {
             insts: f.dfg.insts.clone(),
-            results: f.dfg.results.clone(),
+            results,
             blocks: f.dfg.blocks.clone(),
-            value_lists: f.dfg.value_lists.clone(),
             values: f.dfg.values.clone(),
             signatures: f.dfg.signatures.clone(),
             old_signatures: f.dfg.old_signatures.clone(),
@@ -406,46 +410,6 @@ pub(crate) fn try_load(
     cache_store: &dyn KeyValueStore,
     func: &mut Function,
 ) -> Result<MachCompileResult, CacheInput> {
-    // Use the input string as the cache key.
-    // TODO: hash something custom
-
-    // Temporarily remove source locations as they're very likely to change in every single
-    // function.
-    //let annotations = std::mem::take(&mut func.srclocs);
-
-    //let name = if let ExternalName::User {
-    //ref mut namespace,
-    //ref mut index,
-    //} = &mut func.name
-    //{
-    //let res = Some((*namespace, *index));
-    //*namespace = 0;
-    //*index = 0;
-    //res
-    //} else {
-    //None
-    //};
-
-    // Temporarily remove any `ExternalName` that's called through a `call` (or equivalent) opcode:
-    //let external_names = {
-    //let mut names = Vec::with_capacity(func.dfg.ext_funcs.len()); // likely a short overestimate, but fine
-    //for func in func.dfg.ext_funcs.values_mut() {
-    //if let ExternalName::User {
-    //ref mut namespace,
-    //ref mut index,
-    //} = func.name
-    //{
-    //names.push(ExtName {
-    //namespace: *namespace,
-    //index: *index,
-    //});
-    //*namespace = 0;
-    //*index = 0;
-    //}
-    //}
-    //names
-    //};
-
     let external_names = func
         .dfg
         .ext_funcs
@@ -470,29 +434,6 @@ pub(crate) fn try_load(
 
     let src = CacheKey::new(func, srcloc_offset);
 
-    //use crate::alloc::string::ToString;
-    //let src = func.to_string();
-
-    // Restore source locations.
-    //func.srclocs = annotations;
-
-    // Restore function name.
-    //if let Some((namespace, index)) = name {
-    //func.name = ExternalName::User { namespace, index };
-    //}
-
-    // Restore function names.
-    //for (func, original_name) in func.dfg.ext_funcs.values_mut().zip(&external_names) {
-    //if let ExternalName::User {
-    //ref mut namespace,
-    //ref mut index,
-    //} = func.name
-    //{
-    //*namespace = original_name.namespace;
-    //*index = original_name.index;
-    //}
-    //}
-
     let hash = {
         use core::hash::{Hash as _, Hasher as _};
         let mut hasher = std::collections::hash_map::DefaultHasher::new(); // fixed keys for determinism
@@ -503,18 +444,28 @@ pub(crate) fn try_load(
     if let Some(bytes) = cache_store.get(CacheHashKey(hash)) {
         match bincode::deserialize::<CachedFunc>(bytes.as_slice()) {
             Ok(result) => {
-                if src == result.src
-                    && external_names.len() == result.compile_result.external_names.len()
-                {
-                    let mach_compile_result =
-                        result.compile_result.expand(srcloc_offset, external_names);
-                    return Ok(mach_compile_result);
+                if src == result.src {
+                    if external_names.len() == result.compile_result.external_names.len() {
+                        let mach_compile_result =
+                            result.compile_result.expand(srcloc_offset, external_names);
+                        return Ok(mach_compile_result);
+                    }
+                    eprintln!("{} not read from cache: external names mismatch", func.name);
+                } else {
+                    eprintln!("{} not read from cache: source mismatch:\nCurrent: {:?}\nCached: {:?}", func.name, src, result.src);
                 }
             }
             Err(err) => {
-                log::debug!("Couldn't deserialize cache entry with key {hash:x}: {err}");
+                eprintln!("Couldn't deserialize cache entry with key {hash:x}: {err}");
+                //log::debug!("Couldn't deserialize cache entry with key {hash:x}: {err}");
             }
         }
+    } else {
+        eprintln!(
+        //log::trace!(
+            "{} not read from cache: function hash {hash:x} not found",
+            func.name
+        );
     }
 
     Err(CacheInput {
