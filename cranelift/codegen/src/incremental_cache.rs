@@ -203,6 +203,12 @@ impl CacheKey {
             ext_funcs,
         };
 
+        let mut layout = f.layout.clone();
+        // Make sure the blocks and instructions are sequenced the same way as we might
+        // have serialized them earlier. This is the symmetric of what's done in
+        // `try_load`.
+        layout.full_renumber();
+
         CacheKey {
             version_marker: f.version_marker,
             signature: f.signature.clone(),
@@ -212,7 +218,7 @@ impl CacheKey {
             tables: f.tables.clone(),
             jump_tables: f.jump_tables.clone(),
             dfg,
-            layout: f.layout.clone(),
+            layout,
             stack_limit: f.stack_limit.clone(),
         }
     }
@@ -436,14 +442,19 @@ pub(crate) fn try_load(
 
     let hash = {
         use core::hash::{Hash as _, Hasher as _};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new(); // fixed keys for determinism
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
         src.hash(&mut hasher);
         hasher.finish()
     };
 
     if let Some(bytes) = cache_store.get(CacheHashKey(hash)) {
         match bincode::deserialize::<CachedFunc>(bytes.as_slice()) {
-            Ok(result) => {
+            Ok(mut result) => {
+                // Make sure the blocks and instructions are sequenced the same way as we might
+                // have serialized them earlier. This is the symmetric of what's done in
+                // `CacheKey`'s ctor.
+                result.src.layout.full_renumber();
+
                 if src == result.src {
                     if external_names.len() == result.compile_result.external_names.len() {
                         let mach_compile_result =
@@ -452,7 +463,45 @@ pub(crate) fn try_load(
                     }
                     eprintln!("{} not read from cache: external names mismatch", func.name);
                 } else {
-                    eprintln!("{} not read from cache: source mismatch:\nCurrent: {:?}\nCached: {:?}", func.name, src, result.src);
+                    eprintln!("{} not read from cache: source mismatch", func.name);
+
+                    //if src.version_marker != result.src.version_marker {
+                        //eprintln!("     because of version marker")
+                    //}
+                    //if src.signature != result.src.signature {
+                        //eprintln!("     because of signature")
+                    //}
+                    //if src.stack_slots != result.src.stack_slots {
+                        //eprintln!("     because of stack slots")
+                    //}
+                    //if src.global_values != result.src.global_values {
+                        //eprintln!("     because of global values")
+                    //}
+                    //if src.heaps != result.src.heaps {
+                        //eprintln!("     because of heaps")
+                    //}
+                    //if src.tables != result.src.tables {
+                        //eprintln!("     because of tables")
+                    //}
+                    //if src.jump_tables != result.src.jump_tables {
+                        //eprintln!("     because of jump tables")
+                    //}
+                    //if src.dfg != result.src.dfg {
+                        //eprintln!("     because of dfg")
+                    //}
+                    //if src.layout != result.src.layout {
+                        //if func.layout.blocks().count() < 8 {
+                            //eprintln!(
+                                //"     because of layout:\n{:?}\n{:?}",
+                                //src.layout, result.src.layout
+                            //);
+                        //} else {
+                            //eprintln!("     because of layout",);
+                        //}
+                    //}
+                    //if src.stack_limit != result.src.stack_limit {
+                        //eprintln!("     because of stack limit")
+                    //}
                 }
             }
             Err(err) => {
@@ -462,7 +511,7 @@ pub(crate) fn try_load(
         }
     } else {
         eprintln!(
-        //log::trace!(
+            //log::trace!(
             "{} not read from cache: function hash {hash:x} not found",
             func.name
         );

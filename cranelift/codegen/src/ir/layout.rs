@@ -25,7 +25,7 @@ use core::iter::{IntoIterator, Iterator};
 /// While data dependencies are not recorded, instruction ordering does affect control
 /// dependencies, so part of the semantics of the program are determined by the layout.
 ///
-#[derive(Clone, PartialEq, Hash)]
+#[derive(Debug, Clone, PartialEq, Hash)]
 pub struct Layout {
     /// Linked list nodes for the layout order of blocks Forms a doubly linked list, terminated in
     /// both ends by `None`.
@@ -311,7 +311,7 @@ impl Layout {
     ///
     /// This doesn't affect the position of anything, but it gives more room in the internal
     /// sequence numbers for inserting instructions later.
-    fn full_renumber(&mut self) {
+    pub(crate) fn full_renumber(&mut self) {
         let _tt = timing::layout_renumber();
         let mut seq = 0;
         let mut next_block = self.first_block;
