@@ -457,9 +457,9 @@ pub(crate) enum ValueData {
 /// ```plain
 ///        | tag:2 |  type:14        |    num:16       | index:32          |
 /// ```
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Hash)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
-struct ValueDataPacked(u64);
+pub(crate) struct ValueDataPacked(u64);
 
 impl ValueDataPacked {
     const INDEX_SHIFT: u64 = 0;

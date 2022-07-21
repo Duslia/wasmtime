@@ -1,13 +1,13 @@
 use crate::alloc::string::String;
 use crate::alloc::vec::Vec;
 use crate::binemit::CodeOffset;
-use crate::ir::dfg::{BlockData, ValueData};
+use crate::ir::dfg::{BlockData, ValueDataPacked};
 use crate::ir::function::VersionMarker;
 use crate::ir::instructions::InstructionData;
 use crate::ir::{
-    self, Block, Constant, ConstantData, ExternalName, FuncRef, Function, Immediate, Inst,
-    JumpTables, Layout, LibCall, SigRef, Signature, SourceLoc, StackSlot, StackSlots, Value,
-    ValueLabel, ValueLabelAssignments, TESTCASE_NAME_LENGTH,
+    self, Block, Constant, ConstantData, DynamicStackSlot, DynamicStackSlots, ExternalName,
+    FuncRef, Function, Immediate, Inst, JumpTables, Layout, LibCall, SigRef, Signature, SourceLoc,
+    StackSlot, StackSlots, Value, ValueLabel, ValueLabelAssignments, TESTCASE_NAME_LENGTH,
 };
 use crate::machinst::isle::UnwindInst;
 use crate::machinst::{MachBufferFinalized, MachCompileResult};
@@ -96,7 +96,7 @@ struct CachedDataFlowGraph {
     insts: PrimaryMap<Inst, InstructionData>,
     results: SecondaryMap<Inst, Vec<Value>>,
     blocks: PrimaryMap<Block, BlockData>,
-    values: PrimaryMap<Value, ValueData>,
+    values: PrimaryMap<Value, ValueDataPacked>,
     signatures: PrimaryMap<SigRef, Signature>,
     old_signatures: SecondaryMap<SigRef, Option<Signature>>,
     immediates: PrimaryMap<Immediate, ConstantData>,
@@ -113,7 +113,8 @@ struct CachedDataFlowGraph {
 struct CacheKey {
     version_marker: VersionMarker,
     signature: Signature,
-    stack_slots: StackSlots,
+    sized_stack_slots: StackSlots,
+    dynamic_stack_slots: DynamicStackSlots,
     global_values: PrimaryMap<ir::GlobalValue, ir::GlobalValueData>,
     heaps: PrimaryMap<ir::Heap, ir::HeapData>,
     tables: PrimaryMap<ir::Table, ir::TableData>,
@@ -212,7 +213,8 @@ impl CacheKey {
         CacheKey {
             version_marker: f.version_marker,
             signature: f.signature.clone(),
-            stack_slots: f.stack_slots.clone(),
+            sized_stack_slots: f.sized_stack_slots.clone(),
+            dynamic_stack_slots: f.dynamic_stack_slots.clone(),
             global_values: f.global_values.clone(),
             heaps: f.heaps.clone(),
             tables: f.tables.clone(),
@@ -344,7 +346,8 @@ struct CachedMachCompiledResult {
     frame_size: u32,
     disasm: Option<String>,
     value_labels_ranges: ValueLabelsRanges,
-    stackslot_offsets: PrimaryMap<StackSlot, u32>,
+    sized_stackslot_offsets: PrimaryMap<StackSlot, u32>,
+    dynamic_stackslot_offsets: PrimaryMap<DynamicStackSlot, u32>,
     bb_starts: Vec<CodeOffset>,
     bb_edges: Vec<(CodeOffset, CodeOffset)>,
     external_names: Vec<ExtName>,
@@ -357,7 +360,8 @@ impl CachedMachCompiledResult {
             frame_size: mcr.frame_size,
             disasm: mcr.disasm.clone(),
             value_labels_ranges: mcr.value_labels_ranges.clone(),
-            stackslot_offsets: mcr.stackslot_offsets.clone(),
+            sized_stackslot_offsets: mcr.sized_stackslot_offsets.clone(),
+            dynamic_stackslot_offsets: mcr.dynamic_stackslot_offsets.clone(),
             bb_starts: mcr.bb_starts.clone(),
             bb_edges: mcr.bb_edges.clone(),
             external_names,
@@ -401,7 +405,8 @@ impl CachedMachCompiledResult {
             frame_size: self.frame_size,
             disasm: self.disasm,
             value_labels_ranges: self.value_labels_ranges,
-            stackslot_offsets: self.stackslot_offsets,
+            sized_stackslot_offsets: self.sized_stackslot_offsets,
+            dynamic_stackslot_offsets: self.dynamic_stackslot_offsets,
             bb_starts: self.bb_starts,
             bb_edges: self.bb_edges,
         }
@@ -466,41 +471,41 @@ pub(crate) fn try_load(
                     eprintln!("{} not read from cache: source mismatch", func.name);
 
                     //if src.version_marker != result.src.version_marker {
-                        //eprintln!("     because of version marker")
+                    //eprintln!("     because of version marker")
                     //}
                     //if src.signature != result.src.signature {
-                        //eprintln!("     because of signature")
+                    //eprintln!("     because of signature")
                     //}
                     //if src.stack_slots != result.src.stack_slots {
-                        //eprintln!("     because of stack slots")
+                    //eprintln!("     because of stack slots")
                     //}
                     //if src.global_values != result.src.global_values {
-                        //eprintln!("     because of global values")
+                    //eprintln!("     because of global values")
                     //}
                     //if src.heaps != result.src.heaps {
-                        //eprintln!("     because of heaps")
+                    //eprintln!("     because of heaps")
                     //}
                     //if src.tables != result.src.tables {
-                        //eprintln!("     because of tables")
+                    //eprintln!("     because of tables")
                     //}
                     //if src.jump_tables != result.src.jump_tables {
-                        //eprintln!("     because of jump tables")
+                    //eprintln!("     because of jump tables")
                     //}
                     //if src.dfg != result.src.dfg {
-                        //eprintln!("     because of dfg")
+                    //eprintln!("     because of dfg")
                     //}
                     //if src.layout != result.src.layout {
-                        //if func.layout.blocks().count() < 8 {
-                            //eprintln!(
-                                //"     because of layout:\n{:?}\n{:?}",
-                                //src.layout, result.src.layout
-                            //);
-                        //} else {
-                            //eprintln!("     because of layout",);
-                        //}
+                    //if func.layout.blocks().count() < 8 {
+                    //eprintln!(
+                    //"     because of layout:\n{:?}\n{:?}",
+                    //src.layout, result.src.layout
+                    //);
+                    //} else {
+                    //eprintln!("     because of layout",);
+                    //}
                     //}
                     //if src.stack_limit != result.src.stack_limit {
-                        //eprintln!("     because of stack limit")
+                    //eprintln!("     because of stack limit")
                     //}
                 }
             }

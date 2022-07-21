@@ -100,7 +100,7 @@ impl fmt::Display for StackSlotData {
 }
 
 /// Contents of a dynamic stack slot.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct DynamicStackSlotData {
     /// The kind of stack slot.
