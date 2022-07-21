@@ -419,7 +419,7 @@ impl CachedMachCompiledResult {
 /// used to store the result of the compilation later in `store`.
 pub(crate) fn try_load(
     cache_store: &dyn KeyValueStore,
-    func: &mut Function,
+    func: &Function,
 ) -> Result<MachCompileResult, CacheInput> {
     let external_names = func
         .dfg

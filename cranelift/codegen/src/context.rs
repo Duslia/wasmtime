@@ -155,7 +155,7 @@ impl Context {
         let old_len = mem.len();
         mem.resize(old_len + info.total_size as usize, 0);
         let new_info = unsafe { self.emit_to_memory(mem.as_mut_ptr().add(old_len)) };
-        debug_assert!(new_info == info);
+        debug_assert_eq!(new_info, info);
         Ok(())
     }
 
@@ -196,7 +196,7 @@ impl Context {
                         "Incremental compilation cache not enabled; did you forget to enable the \
                     feature in cranelift-codegen?"
                     );
-                    Some(())
+                    Some(()) // disambiguate Option type for rustc
                 }
             } else {
                 None
