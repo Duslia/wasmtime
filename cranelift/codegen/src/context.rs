@@ -14,6 +14,7 @@ use crate::binemit::CodeInfo;
 use crate::dce::do_dce;
 use crate::dominator_tree::DominatorTree;
 use crate::flowgraph::ControlFlowGraph;
+use crate::incremental_cache::CacheKeyHash;
 use crate::ir::Function;
 use crate::isa::TargetIsa;
 use crate::legalizer::simple_legalize;
@@ -94,6 +95,38 @@ impl IncrementalCacheStats {
     }
 }
 
+// TODO remove this structure used for testing purposes
+pub trait KeyValueStore {
+    fn get(&self, key: CacheKeyHash) -> Option<Vec<u8>>;
+    fn write(&mut self, key: CacheKeyHash, val: Vec<u8>) -> bool;
+}
+
+pub struct TmpInMemoryStore {
+    store: std::collections::HashMap<CacheKeyHash, Vec<u8>>,
+}
+
+impl TmpInMemoryStore {
+    fn new() -> Self {
+        Self {
+            store: Default::default(),
+        }
+    }
+}
+
+impl KeyValueStore for TmpInMemoryStore {
+    fn get(&self, key: CacheKeyHash) -> Option<Vec<u8>> {
+        self.store.get(&key).cloned()
+    }
+    fn write(&mut self, key: CacheKeyHash, val: Vec<u8>) -> bool {
+        self.store.insert(key, val);
+        true
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref CACHE_STORE: std::sync::Mutex<TmpInMemoryStore> = std::sync::Mutex::new(TmpInMemoryStore::new());
+}
+
 impl Context {
     /// Allocate a new compilation context.
     ///
@@ -169,25 +202,29 @@ impl Context {
     pub fn compile(&mut self, isa: &dyn TargetIsa) -> CodegenResult<CodeInfo> {
         let _tt = timing::compile();
 
-        let cache_store = crate::incremental_cache::TmpFileCacheStore;
-
         let cache_input = {
             if isa.flags().enable_incremental_compilation_cache() {
                 #[cfg(feature = "incremental-cache")]
                 {
                     let _tt = timing::try_incremental_cache();
                     self.stats.num_lookups += 1;
-                    let cache_input =
-                        match crate::incremental_cache::try_load(&cache_store, &mut self.func) {
-                            Ok(mach_compile_result) => {
-                                let info = mach_compile_result.code_info();
-                                self.mach_compile_result = Some(mach_compile_result);
-                                self.stats.num_hits += 1;
-                                return Ok(info);
-                            }
-                            Err(cache_input) => cache_input,
-                        };
-                    Some(cache_input)
+                    let (cache_key, cache_key_hash) =
+                        crate::incremental_cache::get_cache_key(&self.func);
+
+                    let cache_store = CACHE_STORE.lock().unwrap();
+                    if let Some(blob) = cache_store.get(cache_key_hash) {
+                        drop(cache_store);
+                        if let Ok(mach_compile_result) =
+                            crate::incremental_cache::try_finish_recompile(&self.func, &blob)
+                        {
+                            let info = mach_compile_result.code_info();
+                            self.mach_compile_result = Some(mach_compile_result);
+                            self.stats.num_hits += 1;
+                            return Ok(info);
+                        }
+                    }
+
+                    Some((cache_key_hash, cache_key))
                 }
 
                 #[cfg(not(feature = "incremental-cache"))]
@@ -243,24 +280,24 @@ impl Context {
 
         let result = isa.compile_function(&self.func, self.want_disasm)?;
 
-        let result = if let Some(cache_input) = cache_input {
+        if let Some((cache_key_hash, cache_key)) = cache_input {
             assert!(isa.flags().enable_incremental_compilation_cache());
 
             #[cfg(feature = "incremental-cache")]
             {
                 let _tt = timing::store_incremental_cache();
-                let cached = crate::incremental_cache::store(&cache_store, cache_input, &result);
-                if cached {
-                    self.stats.num_cached += 1;
+                if let Ok(blob) =
+                    crate::incremental_cache::serialize_compiled(cache_key, &self.func, &result)
+                {
+                    if CACHE_STORE.lock().unwrap().write(cache_key_hash, blob) {
+                        self.stats.num_cached += 1;
+                    }
                 }
-                result
             }
 
             #[cfg(not(feature = "incremental-cache"))]
             unreachable!("unreachable because of above branch")
-        } else {
-            result
-        };
+        }
 
         let info = result.code_info();
         self.mach_compile_result = Some(result);

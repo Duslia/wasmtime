@@ -18,35 +18,18 @@ use cranelift_entity::PrimaryMap;
 use cranelift_entity::{EntityRef as _, SecondaryMap};
 use smallvec::SmallVec;
 
-pub struct CacheHashKey(u64);
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+pub struct CacheKeyHash(u64);
 
-impl std::fmt::Display for CacheHashKey {
+impl std::fmt::Display for CacheKeyHash {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-pub trait KeyValueStore {
-    fn get(&self, key: CacheHashKey) -> Option<Vec<u8>>;
-
-    fn write(&self, key: CacheHashKey, val: Vec<u8>) -> bool;
-}
-
-pub struct TmpFileCacheStore;
-
-impl KeyValueStore for TmpFileCacheStore {
-    fn get(&self, key: CacheHashKey) -> Option<Vec<u8>> {
-        std::fs::read(format!("/tmp/clif-{}.compiled", key)).ok()
-    }
-
-    fn write(&self, key: CacheHashKey, val: Vec<u8>) -> bool {
-        std::fs::write(format!("/tmp/clif-{key}.compiled"), val).is_ok()
-    }
-}
-
 #[derive(serde::Serialize, serde::Deserialize)]
 struct CachedFunc {
-    src: CacheKey,
+    cache_key: CacheKey,
     // TODO add compilation parameters too
     compile_result: CachedMachCompiledResult,
 }
@@ -72,7 +55,7 @@ struct CachedConstantPool {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-pub enum CachedExternalName {
+enum CachedExternalName {
     User,
     TestCase {
         length: u8,
@@ -109,8 +92,12 @@ struct CachedDataFlowGraph {
     ext_funcs: PrimaryMap<FuncRef, CachedExtFuncData>,
 }
 
+/// Key for caching a single function's compilation.
+///
+/// If two functions get the same `CacheKey`, then we can reuse the compiled artifacts, modulo some
+/// patching.
 #[derive(PartialEq, Hash, serde::Serialize, serde::Deserialize)]
-struct CacheKey {
+pub struct CacheKey {
     version_marker: VersionMarker,
     signature: Signature,
     sized_stack_slots: StackSlots,
@@ -125,6 +112,9 @@ struct CacheKey {
 }
 
 impl CacheKey {
+    /// Creates a new cache store key for a function.
+    ///
+    /// This is a bit expensive to compute, so it should be cached.
     fn new(f: &Function, offset: SourceLoc) -> Self {
         let constants = CachedConstantPool {
             handles_to_values: f.dfg.constants.handles_to_values.clone(),
@@ -226,13 +216,6 @@ impl CacheKey {
     }
 }
 
-pub(crate) struct CacheInput {
-    src: CacheKey,
-    hash_key: CacheHashKey,
-    srcloc_offset: SourceLoc,
-    external_names: Vec<ExtName>,
-}
-
 /// Relative source location.
 ///
 /// This can be used to recompute source locations independently of the other functions in the
@@ -262,7 +245,7 @@ impl RelSourceLoc {
 // Copies of data structures that use `RelSourceLoc` instead of `SourceLoc`.
 
 #[derive(serde::Serialize, serde::Deserialize)]
-pub struct CachedMachSrcLoc {
+struct CachedMachSrcLoc {
     start: CodeOffset,
     end: CodeOffset,
     loc: RelSourceLoc,
@@ -413,16 +396,30 @@ impl CachedMachCompiledResult {
     }
 }
 
-/// Try to load a precompiled `MachCompileResult` from the given cache store.
+/// Compute a cache key, and hash it on your behalf.
 ///
-/// If it fails because there's an input mismatch or it wasn't present, returns the cache key to be
-/// used to store the result of the compilation later in `store`.
-pub(crate) fn try_load(
-    cache_store: &dyn KeyValueStore,
-    func: &Function,
-) -> Result<MachCompileResult, CacheInput> {
-    let external_names = func
-        .dfg
+/// Since computing the `CacheKey` is a bit expensive, it should be done as least as possible.
+pub fn get_cache_key(func: &Function) -> (CacheKey, CacheKeyHash) {
+    let srcloc_offset = func
+        .srclocs
+        .get(Inst::new(0))
+        .cloned()
+        .unwrap_or(SourceLoc::new(0));
+
+    let cache_key = CacheKey::new(func, srcloc_offset);
+
+    let hash = {
+        use core::hash::{Hash as _, Hasher as _};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        cache_key.hash(&mut hasher);
+        hasher.finish()
+    };
+
+    (cache_key, CacheKeyHash(hash))
+}
+
+fn get_user_external_names(func: &Function) -> Vec<ExtName> {
+    func.dfg
         .ext_funcs
         .values()
         .filter_map(|data| {
@@ -435,120 +432,104 @@ pub(crate) fn try_load(
                 None
             }
         })
-        .collect::<Vec<_>>();
+        .collect::<Vec<_>>()
+}
 
+/// Given a function that's been successfully compiled, serialize it to a blob that the caller may
+/// store somewhere for future use by `try_finish_recompile`.
+pub fn serialize_compiled(
+    cache_key: CacheKey,
+    func: &Function,
+    result: &MachCompileResult,
+) -> Result<Vec<u8>, bincode::Error> {
     let srcloc_offset = func
         .srclocs
         .get(Inst::new(0))
         .cloned()
         .unwrap_or(SourceLoc::new(0));
-
-    let src = CacheKey::new(func, srcloc_offset);
-
-    let hash = {
-        use core::hash::{Hash as _, Hasher as _};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        src.hash(&mut hasher);
-        hasher.finish()
+    let external_names = get_user_external_names(func);
+    let cached = CachedFunc {
+        cache_key,
+        compile_result: CachedMachCompiledResult::new(result, external_names, srcloc_offset),
     };
 
-    if let Some(bytes) = cache_store.get(CacheHashKey(hash)) {
-        match bincode::deserialize::<CachedFunc>(bytes.as_slice()) {
-            Ok(mut result) => {
-                // Make sure the blocks and instructions are sequenced the same way as we might
-                // have serialized them earlier. This is the symmetric of what's done in
-                // `CacheKey`'s ctor.
-                result.src.layout.full_renumber();
-
-                if src == result.src {
-                    if external_names.len() == result.compile_result.external_names.len() {
-                        let mach_compile_result =
-                            result.compile_result.expand(srcloc_offset, external_names);
-                        return Ok(mach_compile_result);
-                    }
-                    eprintln!("{} not read from cache: external names mismatch", func.name);
-                } else {
-                    eprintln!("{} not read from cache: source mismatch", func.name);
-
-                    //if src.version_marker != result.src.version_marker {
-                    //eprintln!("     because of version marker")
-                    //}
-                    //if src.signature != result.src.signature {
-                    //eprintln!("     because of signature")
-                    //}
-                    //if src.stack_slots != result.src.stack_slots {
-                    //eprintln!("     because of stack slots")
-                    //}
-                    //if src.global_values != result.src.global_values {
-                    //eprintln!("     because of global values")
-                    //}
-                    //if src.heaps != result.src.heaps {
-                    //eprintln!("     because of heaps")
-                    //}
-                    //if src.tables != result.src.tables {
-                    //eprintln!("     because of tables")
-                    //}
-                    //if src.jump_tables != result.src.jump_tables {
-                    //eprintln!("     because of jump tables")
-                    //}
-                    //if src.dfg != result.src.dfg {
-                    //eprintln!("     because of dfg")
-                    //}
-                    //if src.layout != result.src.layout {
-                    //if func.layout.blocks().count() < 8 {
-                    //eprintln!(
-                    //"     because of layout:\n{:?}\n{:?}",
-                    //src.layout, result.src.layout
-                    //);
-                    //} else {
-                    //eprintln!("     because of layout",);
-                    //}
-                    //}
-                    //if src.stack_limit != result.src.stack_limit {
-                    //eprintln!("     because of stack limit")
-                    //}
-                }
-            }
-            Err(err) => {
-                eprintln!("Couldn't deserialize cache entry with key {hash:x}: {err}");
-                //log::debug!("Couldn't deserialize cache entry with key {hash:x}: {err}");
-            }
-        }
-    } else {
-        eprintln!(
-            //log::trace!(
-            "{} not read from cache: function hash {hash:x} not found",
-            func.name
-        );
-    }
-
-    Err(CacheInput {
-        src,
-        hash_key: CacheHashKey(hash),
-        srcloc_offset,
-        external_names,
-    })
+    bincode::serialize(&cached)
 }
 
-/// Stores a `MachCompileResult` in the given cache store for the given key.
-pub(crate) fn store(
-    cache_store: &dyn KeyValueStore,
-    input: CacheInput,
-    result: &MachCompileResult,
-) -> bool {
-    let cached = CachedFunc {
-        src: input.src,
-        compile_result: CachedMachCompiledResult::new(
-            result,
-            input.external_names,
-            input.srcloc_offset,
-        ),
-    };
-    let mut did_cache = false;
-    if let Ok(bytes) = bincode::serialize(&cached) {
-        if cache_store.write(input.hash_key, bytes) {
-            did_cache = true;
+// TODO could the error return an indication why something went wrong?
+pub fn try_finish_recompile(func: &Function, bytes: &[u8]) -> Result<MachCompileResult, ()> {
+    let srcloc_offset = func
+        .srclocs
+        .get(Inst::new(0))
+        .cloned()
+        .unwrap_or(SourceLoc::new(0));
+    let cache_key = CacheKey::new(func, srcloc_offset);
+
+    let external_names = get_user_external_names(func);
+
+    // try to deserialize, if not failure, return final recompiled code
+    match bincode::deserialize::<CachedFunc>(bytes) {
+        Ok(mut result) => {
+            // Make sure the blocks and instructions are sequenced the same way as we might
+            // have serialized them earlier. This is the symmetric of what's done in
+            // `CacheKey`'s ctor.
+            result.cache_key.layout.full_renumber();
+
+            if cache_key == result.cache_key {
+                if external_names.len() == result.compile_result.external_names.len() {
+                    let mach_compile_result =
+                        result.compile_result.expand(srcloc_offset, external_names);
+                    return Ok(mach_compile_result);
+                }
+                eprintln!("{} not read from cache: external names mismatch", func.name);
+            } else {
+                eprintln!("{} not read from cache: source mismatch", func.name);
+
+                //if cache_key.version_marker != result.cache_key.version_marker {
+                //eprintln!("     because of version marker")
+                //}
+                //if cache_key.signature != result.cache_key.signature {
+                //eprintln!("     because of signature")
+                //}
+                //if cache_key.stack_slots != result.cache_key.stack_slots {
+                //eprintln!("     because of stack slots")
+                //}
+                //if cache_key.global_values != result.cache_key.global_values {
+                //eprintln!("     because of global values")
+                //}
+                //if cache_key.heaps != result.cache_key.heaps {
+                //eprintln!("     because of heaps")
+                //}
+                //if cache_key.tables != result.cache_key.tables {
+                //eprintln!("     because of tables")
+                //}
+                //if cache_key.jump_tables != result.cache_key.jump_tables {
+                //eprintln!("     because of jump tables")
+                //}
+                //if cache_key.dfg != result.cache_key.dfg {
+                //eprintln!("     because of dfg")
+                //}
+                //if cache_key.layout != result.cache_key.layout {
+                //if func.layout.blocks().count() < 8 {
+                //eprintln!(
+                //"     because of layout:\n{:?}\n{:?}",
+                //cache_key.layout, result.cache_key.layout
+                //);
+                //} else {
+                //eprintln!("     because of layout",);
+                //}
+                //}
+                //if cache_key.stack_limit != result.cache_key.stack_limit {
+                //eprintln!("     because of stack limit")
+                //}
+            }
+        }
+
+        Err(err) => {
+            eprintln!("Couldn't deserialize cache entry: {err}");
+            //log::debug!("Couldn't deserialize cache entry with key {hash:x}: {err}");
         }
     }
-    did_cache
+
+    Err(())
 }
