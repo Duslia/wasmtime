@@ -102,3 +102,9 @@ name = "instantiate-many"
 path = "fuzz_targets/instantiate-many.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "cranelift-icache"
+path = "fuzz_targets/cranelift-icache.rs"
+test = false
+doc = false

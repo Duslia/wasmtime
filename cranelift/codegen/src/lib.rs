@@ -116,7 +116,7 @@ mod value_label;
 mod souper_harvest;
 
 #[cfg(feature = "incremental-cache")]
-mod incremental_cache;
+pub mod incremental_cache;
 
 pub use crate::result::{CodegenError, CodegenResult};
 

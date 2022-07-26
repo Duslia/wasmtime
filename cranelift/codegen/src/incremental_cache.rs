@@ -1,3 +1,5 @@
+//! TODO
+
 use crate::alloc::string::String;
 use crate::alloc::vec::Vec;
 use crate::binemit::CodeOffset;
@@ -18,6 +20,8 @@ use cranelift_entity::PrimaryMap;
 use cranelift_entity::{EntityRef as _, SecondaryMap};
 use smallvec::SmallVec;
 
+/// Hashed `CachedKey`, to use as an identifier when looking up whether a function has already been
+/// compiled or not.
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub struct CacheKeyHash(u64);
 
@@ -71,7 +75,7 @@ struct CachedExtFuncData {
     colocated: bool,
 }
 
-#[derive(PartialEq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 struct CachedDataFlowGraph {
     // --
     // Those fields are the same as in DataFlowGraph
@@ -96,7 +100,7 @@ struct CachedDataFlowGraph {
 ///
 /// If two functions get the same `CacheKey`, then we can reuse the compiled artifacts, modulo some
 /// patching.
-#[derive(PartialEq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct CacheKey {
     version_marker: VersionMarker,
     signature: Signature,
@@ -352,19 +356,20 @@ impl CachedMachCompiledResult {
     }
 
     fn expand(self, offset: SourceLoc, external_names: Vec<ExtName>) -> MachCompileResult {
+        assert_eq!(external_names.len(), self.external_names.len());
+
         let mut buffer = self.buffer.expand(offset);
 
         // Construct a mapping from compiled- to restored- external names.
         let mut map = HashMap::new();
 
-        assert_eq!(external_names.len(), self.external_names.len());
         for (prev, after) in self.external_names.into_iter().zip(external_names) {
-            if map.insert((prev.namespace, prev.index), after).is_some() {
-                panic!(
-                    "duplicate entry in prev->new namespace for {};{}",
-                    prev.namespace, prev.index
-                );
-            }
+            assert!(
+                map.insert((prev.namespace, prev.index), after).is_none(),
+                "duplicate entry in prev->new namespace for {};{}",
+                prev.namespace,
+                prev.index
+            );
         }
 
         // Adjust external names in relocations.
@@ -448,6 +453,7 @@ pub fn serialize_compiled(
         .cloned()
         .unwrap_or(SourceLoc::new(0));
     let external_names = get_user_external_names(func);
+
     let cached = CachedFunc {
         cache_key,
         compile_result: CachedMachCompiledResult::new(result, external_names, srcloc_offset),
@@ -457,14 +463,18 @@ pub fn serialize_compiled(
 }
 
 // TODO could the error return an indication why something went wrong?
-pub fn try_finish_recompile(func: &Function, bytes: &[u8]) -> Result<MachCompileResult, ()> {
+/// Given a function that's been precompiled and its entry in the caching storage, try to shortcut
+/// compilation of the given function.
+pub fn try_finish_recompile(
+    cache_key: &CacheKey,
+    func: &Function,
+    bytes: &[u8],
+) -> Result<MachCompileResult, ()> {
     let srcloc_offset = func
         .srclocs
         .get(Inst::new(0))
         .cloned()
         .unwrap_or(SourceLoc::new(0));
-    let cache_key = CacheKey::new(func, srcloc_offset);
-
     let external_names = get_user_external_names(func);
 
     // try to deserialize, if not failure, return final recompiled code
@@ -475,7 +485,7 @@ pub fn try_finish_recompile(func: &Function, bytes: &[u8]) -> Result<MachCompile
             // `CacheKey`'s ctor.
             result.cache_key.layout.full_renumber();
 
-            if cache_key == result.cache_key {
+            if *cache_key == result.cache_key {
                 if external_names.len() == result.compile_result.external_names.len() {
                     let mach_compile_result =
                         result.compile_result.expand(srcloc_offset, external_names);
