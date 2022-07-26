@@ -6,7 +6,9 @@ use libfuzzer_sys::fuzz_target;
 use cranelift_fuzzgen::*;
 use target_lexicon::Triple;
 
-fuzz_target!(|testcase: TestCase| {
+fuzz_target!(|func: SingleFunction| {
+    let func = func.0;
+
     let flags = settings::Flags::new(settings::builder());
     flags.enable_incremental_compilation_cache();
 
@@ -21,11 +23,9 @@ fuzz_target!(|testcase: TestCase| {
 
     let isa = isa_builder.finish(flags).unwrap();
 
-    let func = testcase.func.clone();
-    let mut context = Context::for_function(testcase.func);
-
     let (cache_key, _cache_key_hash) = icache::get_cache_key(&func);
 
+    let mut context = Context::for_function(func.clone());
     let prev_info = match context.compile(&*isa) {
         Ok(info) => info,
         Err(_) => return,
