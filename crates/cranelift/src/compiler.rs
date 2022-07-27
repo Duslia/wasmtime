@@ -7,6 +7,7 @@ use crate::{
     CompiledFunction, CompiledFunctions, FunctionAddressMap, Relocation, RelocationTarget,
 };
 use anyhow::{Context as _, Result};
+use cranelift_codegen::incremental_cache::{CacheKeyHash, CacheStore};
 use cranelift_codegen::ir::{self, ExternalName, InstBuilder, MemFlags, Value};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::print_errors::pretty_error;
@@ -37,9 +38,34 @@ use wasmtime_environ::{
 #[cfg(feature = "component-model")]
 mod component;
 
+/// In-memory cache store used for the incremental compilation cache.
+#[derive(Default)]
+struct InMemoryCache {
+    map: HashMap<CacheKeyHash, (usize, usize)>,
+    arena: Vec<u8>,
+}
+
+impl CacheStore for InMemoryCache {
+    fn get(&self, key: CacheKeyHash) -> Option<&[u8]> {
+        self.map
+            .get(&key)
+            .copied()
+            .map(|(index, size)| &self.arena[index..(index + size)])
+    }
+
+    fn insert(&mut self, key: CacheKeyHash, val: Vec<u8>) -> bool {
+        let first = self.arena.len();
+        let size = val.len();
+        self.arena.extend(val);
+        self.map.insert(key, (first, size));
+        true
+    }
+}
+
 struct CompilerContext {
     func_translator: FuncTranslator,
     codegen_context: Context,
+    cache_store: InMemoryCache,
 }
 
 impl Default for CompilerContext {
@@ -47,6 +73,7 @@ impl Default for CompilerContext {
         Self {
             func_translator: FuncTranslator::new(),
             codegen_context: Context::new(),
+            cache_store: Default::default()
         }
     }
 }
@@ -151,6 +178,7 @@ impl wasmtime_environ::Compiler for Compiler {
         let CompilerContext {
             mut func_translator,
             codegen_context: mut context,
+            mut cache_store
         } = self.take_context();
 
         context.func.name = get_func_name(func_index);
@@ -220,10 +248,15 @@ impl wasmtime_environ::Compiler for Compiler {
             &mut func_env,
         )?;
 
-        let mut code_buf: Vec<u8> = Vec::new();
-        context
-            .compile_and_emit(isa, &mut code_buf)
+        //context
+        //.compile_and_emit(isa, &mut code_buf)
+        //.map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
+
+        let code_info = context
+            .compile_with_cache(isa, &mut cache_store)
             .map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
+        let mut code_buf: Vec<u8> = vec![0; code_info.total_size as _];
+        unsafe { context.emit_to_memory(code_buf.as_mut_ptr()) };
 
         let result = context.mach_compile_result.as_ref().unwrap();
 
@@ -278,6 +311,7 @@ impl wasmtime_environ::Compiler for Compiler {
         self.save_context(CompilerContext {
             func_translator,
             codegen_context: context,
+            cache_store,
         });
 
         Ok(Box::new(CompiledFunction {
@@ -450,6 +484,7 @@ impl Compiler {
         let CompilerContext {
             mut func_translator,
             codegen_context: mut context,
+            mut cache_store,
         } = self.take_context();
 
         context.func = ir::Function::with_name_signature(ExternalName::user(0, 0), host_signature);
@@ -512,10 +547,11 @@ impl Compiler {
         builder.ins().return_(&[]);
         builder.finalize();
 
-        let func = self.finish_trampoline(&mut context, isa)?;
+        let func = self.finish_trampoline(&mut context, &mut cache_store, isa)?;
         self.save_context(CompilerContext {
             func_translator,
             codegen_context: context,
+            cache_store
         });
         Ok(func)
     }
@@ -560,6 +596,7 @@ impl Compiler {
         let CompilerContext {
             mut func_translator,
             codegen_context: mut context,
+            mut cache_store,
         } = self.take_context();
 
         context.func =
@@ -589,10 +626,11 @@ impl Compiler {
 
         self.wasm_to_host_load_results(ty, &mut builder, values_vec_ptr_val);
 
-        let func = self.finish_trampoline(&mut context, isa)?;
+        let func = self.finish_trampoline(&mut context, &mut cache_store, isa)?;
         self.save_context(CompilerContext {
             func_translator,
             codegen_context: context,
+            cache_store,
         });
         Ok(func)
     }
@@ -687,12 +725,18 @@ impl Compiler {
     fn finish_trampoline(
         &self,
         context: &mut Context,
+        cache_store: &mut InMemoryCache,
         isa: &dyn TargetIsa,
     ) -> Result<CompiledFunction, CompileError> {
-        let mut code_buf = Vec::new();
-        context
-            .compile_and_emit(isa, &mut code_buf)
+        //context
+            //.compile_and_emit(isa, &mut code_buf)
+            //.map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
+        let code_info = context
+            .compile_with_cache(isa, cache_store)
             .map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
+        let mut code_buf: Vec<u8> = vec![0; code_info.total_size as _];
+        unsafe { context.emit_to_memory(code_buf.as_mut_ptr()) };
+
         let result = context.mach_compile_result.as_ref().unwrap();
 
         // Processing relocations isn't the hardest thing in the world here but

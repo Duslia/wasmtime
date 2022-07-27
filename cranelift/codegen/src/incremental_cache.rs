@@ -24,7 +24,7 @@ use smallvec::SmallVec;
 #[cfg(feature = "incremental-cache")]
 pub trait CacheStore {
     /// Given a cache key hash, retrieves the associated opaque serialized data.
-    fn get(&self, key: CacheKeyHash) -> Option<Vec<u8>>;
+    fn get(&self, key: CacheKeyHash) -> Option<&[u8]>;
 
     /// Given a new cache key and a serialized blob obtained from `serialize_compiled`, stores it
     /// in the cache store.
@@ -106,13 +106,16 @@ struct CachedDataFlowGraph {
     // --
     constants: CachedConstantPool,
     values_labels: Option<BTreeMap<Value, CachedValueLabelAssignments>>,
+    /// Same as `DataFlowGraph::ext_funcs`, but we remove the identifying fields of the
+    /// `ExternalName` so two calls to external user functions appear the same and end up in the
+    /// same cache bucket.
     ext_funcs: PrimaryMap<FuncRef, CachedExtFuncData>,
 }
 
 /// Key for caching a single function's compilation.
 ///
 /// If two functions get the same `CacheKey`, then we can reuse the compiled artifacts, modulo some
-/// patching.
+/// relocation fixups.
 #[derive(Clone, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct CacheKey {
     version_marker: VersionMarker,
@@ -131,7 +134,7 @@ pub struct CacheKey {
 impl CacheKey {
     /// Creates a new cache store key for a function.
     ///
-    /// This is a bit expensive to compute, so it should be cached.
+    /// This is a bit expensive to compute, so it should be cached and reused as much as possible.
     fn new(f: &Function, offset: SourceLoc) -> Self {
         let constants = CachedConstantPool {
             handles_to_values: f.dfg.constants.handles_to_values.clone(),
@@ -171,10 +174,15 @@ impl CacheKey {
         let ext_funcs = f
             .dfg
             .ext_funcs
-            .iter()
-            .map(|(_reff, ext_data)| {
+            .values()
+            .map(|ext_data| {
                 let name = match ext_data.name {
-                    ExternalName::User { .. } => CachedExternalName::User,
+                    ExternalName::User { .. } => {
+                        // Remove the identifying properties of the call to that external function,
+                        // as we want two functions with calls to different functions to reuse each
+                        // other's cached artifacts.
+                        CachedExternalName::User
+                    }
                     ExternalName::TestCase { length, ascii } => {
                         CachedExternalName::TestCase { length, ascii }
                     }
@@ -334,8 +342,8 @@ impl CachedMachBufferFinalized {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ExtName {
+#[derive(Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct UserExternalName {
     namespace: u32,
     index: u32,
 }
@@ -350,11 +358,32 @@ struct CachedMachCompiledResult {
     dynamic_stackslot_offsets: PrimaryMap<DynamicStackSlot, u32>,
     bb_starts: Vec<CodeOffset>,
     bb_edges: Vec<(CodeOffset, CodeOffset)>,
-    external_names: Vec<ExtName>,
+
+    /// Inverted mapping of user external name to `FuncRef`, constructed once to allow patching.
+    func_refs: HashMap<UserExternalName, FuncRef>,
 }
 
 impl CachedMachCompiledResult {
-    fn new(mcr: &MachCompileResult, external_names: Vec<ExtName>, offset: SourceLoc) -> Self {
+    fn new(func: &Function, mcr: &MachCompileResult, offset: SourceLoc) -> Self {
+        let func_refs = func
+            .dfg
+            .ext_funcs
+            .iter()
+            .filter_map(|(func_ref, ext_data)| {
+                if let ExternalName::User { namespace, index } = &ext_data.name {
+                    Some((
+                        UserExternalName {
+                            namespace: *namespace,
+                            index: *index,
+                        },
+                        func_ref,
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         Self {
             buffer: CachedMachBufferFinalized::new(&mcr.buffer, offset),
             frame_size: mcr.frame_size,
@@ -364,26 +393,12 @@ impl CachedMachCompiledResult {
             dynamic_stackslot_offsets: mcr.dynamic_stackslot_offsets.clone(),
             bb_starts: mcr.bb_starts.clone(),
             bb_edges: mcr.bb_edges.clone(),
-            external_names,
+            func_refs,
         }
     }
 
-    fn expand(self, offset: SourceLoc, external_names: Vec<ExtName>) -> MachCompileResult {
-        assert_eq!(external_names.len(), self.external_names.len());
-
+    fn expand(self, after: &Function, offset: SourceLoc) -> MachCompileResult {
         let mut buffer = self.buffer.expand(offset);
-
-        // Construct a mapping from compiled- to restored- external names.
-        let mut map = HashMap::new();
-
-        for (prev, after) in self.external_names.into_iter().zip(external_names) {
-            assert!(
-                map.insert((prev.namespace, prev.index), after).is_none(),
-                "duplicate entry in prev->new namespace for {};{}",
-                prev.namespace,
-                prev.index
-            );
-        }
 
         // Adjust external names in relocations.
         for reloc in buffer.relocs.iter_mut() {
@@ -392,9 +407,20 @@ impl CachedMachCompiledResult {
                 ref mut index,
             } = reloc.name
             {
-                if let Some(after) = map.get(&(*namespace, *index)) {
-                    *namespace = after.namespace;
-                    *index = after.index;
+                if let Some(func_ref) = self.func_refs.get(&UserExternalName {
+                    namespace: *namespace,
+                    index: *index,
+                }) {
+                    if let ExternalName::User {
+                        namespace: new_namespace,
+                        index: new_index,
+                    } = &after.dfg.ext_funcs[*func_ref].name
+                    {
+                        *namespace = *new_namespace;
+                        *index = *new_index;
+                    } else {
+                        panic!("unexpected kind of relocation??");
+                    }
                 } else {
                     panic!("didn't find previous mention of {};{}", namespace, index);
                 }
@@ -436,23 +462,6 @@ pub fn get_cache_key(func: &Function) -> (CacheKey, CacheKeyHash) {
     (cache_key, CacheKeyHash(hash))
 }
 
-fn get_user_external_names(func: &Function) -> Vec<ExtName> {
-    func.dfg
-        .ext_funcs
-        .values()
-        .filter_map(|data| {
-            if let ExternalName::User { namespace, index } = &data.name {
-                Some(ExtName {
-                    namespace: *namespace,
-                    index: *index,
-                })
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<_>>()
-}
-
 /// Given a function that's been successfully compiled, serialize it to a blob that the caller may
 /// store somewhere for future use by `try_finish_recompile`.
 pub fn serialize_compiled(
@@ -465,11 +474,10 @@ pub fn serialize_compiled(
         .get(Inst::new(0))
         .cloned()
         .unwrap_or(SourceLoc::new(0));
-    let external_names = get_user_external_names(func);
 
     let cached = CachedFunc {
         cache_key,
-        compile_result: CachedMachCompiledResult::new(result, external_names, srcloc_offset),
+        compile_result: CachedMachCompiledResult::new(func, result, srcloc_offset),
     };
 
     bincode::serialize(&cached)
@@ -488,7 +496,6 @@ pub fn try_finish_recompile(
         .get(Inst::new(0))
         .cloned()
         .unwrap_or(SourceLoc::new(0));
-    let external_names = get_user_external_names(func);
 
     // try to deserialize, if not failure, return final recompiled code
     match bincode::deserialize::<CachedFunc>(bytes) {
@@ -499,12 +506,8 @@ pub fn try_finish_recompile(
             result.cache_key.layout.full_renumber();
 
             if *cache_key == result.cache_key {
-                if external_names.len() == result.compile_result.external_names.len() {
-                    let mach_compile_result =
-                        result.compile_result.expand(srcloc_offset, external_names);
-                    return Ok(mach_compile_result);
-                }
-                eprintln!("{} not read from cache: external names mismatch", func.name);
+                let mach_compile_result = result.compile_result.expand(func, srcloc_offset);
+                return Ok(mach_compile_result);
             } else {
                 eprintln!("{} not read from cache: source mismatch", func.name);
 
