@@ -14,8 +14,6 @@ use crate::binemit::CodeInfo;
 use crate::dce::do_dce;
 use crate::dominator_tree::DominatorTree;
 use crate::flowgraph::ControlFlowGraph;
-#[cfg(feature = "incremental-cache")]
-use crate::incremental_cache::CacheKeyHash;
 use crate::ir::Function;
 use crate::isa::TargetIsa;
 use crate::legalizer::simple_legalize;
@@ -65,7 +63,6 @@ pub struct Context {
 /// TODO
 #[derive(Default)]
 pub struct IncrementalCacheStats {
-    printed: bool,
     num_lookups: usize,
     num_hits: usize,
     num_cached: usize,
@@ -81,7 +78,6 @@ impl IncrementalCacheStats {
 
     /// TODO
     pub fn print(&mut self) {
-        self.printed = true;
         eprintln!(
             //log::debug!(
             "Incremental compilation cache stats: {}/{} = {}% (hits/lookup)\ncached: {}",
@@ -94,17 +90,6 @@ impl IncrementalCacheStats {
         self.num_lookups = 0;
         self.num_cached = 0;
     }
-}
-
-/// Backing storage for the incremental compilation cache.
-#[cfg(feature = "incremental-cache")]
-pub trait CacheStore {
-    /// Given a cache key hash, retrieves the associated opaque serialized data.
-    fn get(&self, key: CacheKeyHash) -> Option<Vec<u8>>;
-
-    /// Given a new cache key and the serialized blob, stores it in the cache store.
-    /// Returns true when insertion is successful, false otherwise.
-    fn insert(&mut self, key: CacheKeyHash, val: Vec<u8>) -> bool;
 }
 
 impl Context {
@@ -235,7 +220,7 @@ impl Context {
     pub fn compile_with_cache(
         &mut self,
         isa: &dyn TargetIsa,
-        cache_store: &mut dyn CacheStore,
+        cache_store: &mut dyn crate::incremental_cache::CacheStore,
     ) -> CodegenResult<CodeInfo> {
         if !isa.flags().enable_incremental_compilation_cache() {
             // If the dynamic flag isn't enabled, compile without any caching involved.

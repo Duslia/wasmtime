@@ -20,6 +20,19 @@ use cranelift_entity::PrimaryMap;
 use cranelift_entity::{EntityRef as _, SecondaryMap};
 use smallvec::SmallVec;
 
+/// Backing storage for the incremental compilation cache, when enabled.
+#[cfg(feature = "incremental-cache")]
+pub trait CacheStore {
+    /// Given a cache key hash, retrieves the associated opaque serialized data.
+    fn get(&self, key: CacheKeyHash) -> Option<Vec<u8>>;
+
+    /// Given a new cache key and a serialized blob obtained from `serialize_compiled`, stores it
+    /// in the cache store.
+    ///
+    /// Returns true when insertion is successful, false otherwise.
+    fn insert(&mut self, key: CacheKeyHash, val: Vec<u8>) -> bool;
+}
+
 /// Hashed `CachedKey`, to use as an identifier when looking up whether a function has already been
 /// compiled or not.
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
