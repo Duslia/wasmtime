@@ -550,6 +550,7 @@ probestack_func_adjusts_sp = false
 enable_jump_tables = true
 enable_heap_access_spectre_mitigation = true
 enable_table_access_spectre_mitigation = true
+enable_incremental_compilation_cache_checks = false
 "#
         );
         assert_eq!(f.opt_level(), super::OptLevel::None);

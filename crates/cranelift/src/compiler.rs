@@ -7,12 +7,11 @@ use crate::{
     CompiledFunction, CompiledFunctions, FunctionAddressMap, Relocation, RelocationTarget,
 };
 use anyhow::{Context as _, Result};
-use cranelift_codegen::incremental_cache::{CacheKeyHash, CacheStore};
 use cranelift_codegen::ir::{self, ExternalName, InstBuilder, MemFlags, Value};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::print_errors::pretty_error;
+use cranelift_codegen::Context;
 use cranelift_codegen::{settings, MachReloc, MachTrap};
-use cranelift_codegen::{Context, IncrementalCacheStats};
 use cranelift_codegen::{MachSrcLoc, MachStackMap};
 use cranelift_entity::{EntityRef, PrimaryMap};
 use cranelift_frontend::FunctionBuilder;
@@ -28,44 +27,28 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::mem;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use wasmtime_environ::{
-    AddressMapSection, CompileError, FilePos, FlagValue, FunctionBodyData, FunctionInfo,
-    InstructionAddressMap, Module, ModuleTranslation, ModuleTypes, StackMapInformation, Trampoline,
-    TrapCode, TrapEncodingBuilder, TrapInformation, Tunables, VMOffsets,
+    AddressMapSection, CacheStore, CompileError, FilePos, FlagValue, FunctionBodyData,
+    FunctionInfo, InstructionAddressMap, Module, ModuleTranslation, ModuleTypes,
+    StackMapInformation, Trampoline, TrapCode, TrapEncodingBuilder, TrapInformation, Tunables,
+    VMOffsets,
 };
 
 #[cfg(feature = "component-model")]
 mod component;
 
-/// In-memory cache store used for the incremental compilation cache.
-#[derive(Default)]
-struct InMemoryCache {
-    map: HashMap<CacheKeyHash, (usize, usize)>,
-    arena: Vec<u8>,
-}
-
-impl CacheStore for InMemoryCache {
-    fn get(&self, key: CacheKeyHash) -> Option<&[u8]> {
-        self.map
-            .get(&key)
-            .copied()
-            .map(|(index, size)| &self.arena[index..(index + size)])
-    }
-
-    fn insert(&mut self, key: CacheKeyHash, val: Vec<u8>) -> bool {
-        let first = self.arena.len();
-        let size = val.len();
-        self.arena.extend(val);
-        self.map.insert(key, (first, size));
-        true
-    }
+struct IncrementalCacheContext {
+    cache_store: Arc<dyn CacheStore>,
+    num_lookups: usize,
+    num_hits: usize,
+    num_cached: usize,
 }
 
 struct CompilerContext {
     func_translator: FuncTranslator,
     codegen_context: Context,
-    cache_store: InMemoryCache,
+    cache_ctx: Option<IncrementalCacheContext>,
 }
 
 impl Default for CompilerContext {
@@ -73,7 +56,7 @@ impl Default for CompilerContext {
         Self {
             func_translator: FuncTranslator::new(),
             codegen_context: Context::new(),
-            cache_store: Default::default()
+            cache_ctx: None,
         }
     }
 }
@@ -84,14 +67,51 @@ pub(crate) struct Compiler {
     contexts: Mutex<Vec<CompilerContext>>,
     isa: Box<dyn TargetIsa>,
     linkopts: LinkOptions,
+    cache_store: Option<Arc<dyn CacheStore>>,
+}
+
+impl Drop for Compiler {
+    fn drop(&mut self) {
+        if self.cache_store.is_none() {
+            return;
+        }
+
+        let mut num_hits = 0;
+        let mut num_lookups = 0;
+        let mut num_cached = 0;
+
+        for ctx in self.contexts.lock().unwrap().iter() {
+            if let Some(ref cache_ctx) = ctx.cache_ctx {
+                num_hits += cache_ctx.num_hits;
+                num_lookups += cache_ctx.num_lookups;
+                num_cached += cache_ctx.num_cached;
+            }
+        }
+
+        if num_lookups > 0 {
+            eprintln!(
+                // TODO replace with log::debug/trace
+                "Incremental compilation cache stats: {}/{} = {}% (hits/lookup)\ncached: {}",
+                num_hits,
+                num_lookups,
+                (num_hits as f32) / (num_lookups as f32) * 100.0,
+                num_cached
+            );
+        }
+    }
 }
 
 impl Compiler {
-    pub(crate) fn new(isa: Box<dyn TargetIsa>, linkopts: LinkOptions) -> Compiler {
+    pub(crate) fn new(
+        isa: Box<dyn TargetIsa>,
+        cache_store: Option<Arc<dyn CacheStore>>,
+        linkopts: LinkOptions,
+    ) -> Compiler {
         Compiler {
             contexts: Default::default(),
             isa,
             linkopts,
+            cache_store,
         }
     }
 
@@ -102,7 +122,18 @@ impl Compiler {
                 ctx.codegen_context.clear();
                 ctx
             })
-            .unwrap_or_else(Default::default)
+            .unwrap_or_else(|| CompilerContext {
+                cache_ctx: self
+                    .cache_store
+                    .as_ref()
+                    .map(|cache_store| IncrementalCacheContext {
+                        cache_store: cache_store.clone(),
+                        num_lookups: 0,
+                        num_hits: 0,
+                        num_cached: 0,
+                    }),
+                ..Default::default()
+            })
     }
 
     fn save_context(&self, ctx: CompilerContext) {
@@ -154,15 +185,6 @@ impl Compiler {
 }
 
 impl wasmtime_environ::Compiler for Compiler {
-    fn print_stats(&self) {
-        let mut stats = IncrementalCacheStats::default();
-        let guard = self.contexts.lock().unwrap();
-        for ctx in &*guard {
-            stats.fuse(&ctx.codegen_context.stats);
-        }
-        stats.print();
-    }
-
     fn compile_function(
         &self,
         translation: &ModuleTranslation<'_>,
@@ -178,7 +200,7 @@ impl wasmtime_environ::Compiler for Compiler {
         let CompilerContext {
             mut func_translator,
             codegen_context: mut context,
-            mut cache_store
+            mut cache_ctx,
         } = self.take_context();
 
         context.func.name = get_func_name(func_index);
@@ -248,15 +270,7 @@ impl wasmtime_environ::Compiler for Compiler {
             &mut func_env,
         )?;
 
-        //context
-        //.compile_and_emit(isa, &mut code_buf)
-        //.map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
-
-        let code_info = context
-            .compile_with_cache(isa, &mut cache_store)
-            .map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
-        let mut code_buf: Vec<u8> = vec![0; code_info.total_size as _];
-        unsafe { context.emit_to_memory(code_buf.as_mut_ptr()) };
+        let code_buf = compile(&mut context, isa, cache_ctx.as_mut())?;
 
         let result = context.mach_compile_result.as_ref().unwrap();
 
@@ -311,7 +325,7 @@ impl wasmtime_environ::Compiler for Compiler {
         self.save_context(CompilerContext {
             func_translator,
             codegen_context: context,
-            cache_store,
+            cache_ctx,
         });
 
         Ok(Box::new(CompiledFunction {
@@ -456,6 +470,83 @@ impl wasmtime_environ::Compiler for Compiler {
     }
 }
 
+fn compile(
+    context: &mut Context,
+    isa: &dyn TargetIsa,
+    cache_ctx: Option<&mut IncrementalCacheContext>,
+) -> Result<Vec<u8>, CompileError> {
+    let mut code_buf = Vec::new();
+    let cache_ctx = match cache_ctx {
+        Some(ctx) => ctx,
+        None => {
+            context
+                .compile_and_emit(isa, &mut code_buf)
+                .map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
+            return Ok(code_buf);
+        }
+    };
+
+    use cranelift_codegen::incremental_cache;
+    use cranelift_codegen::timing;
+
+    let mut cranelift_compile = || {
+        let (cache_key_hash, cache_key) = {
+            let _tt = timing::try_incremental_cache();
+            cache_ctx.num_lookups += 1;
+
+            let (cache_key, cache_key_hash) = incremental_cache::compute_cache_key(&context.func);
+
+            if let Some(blob) = cache_ctx.cache_store.get(cache_key_hash.0) {
+                if let Ok(mach_compile_result) =
+                    incremental_cache::try_finish_recompile(&cache_key, &context.func, &blob)
+                {
+                    cache_ctx.num_hits += 1;
+                    let info = mach_compile_result.code_info();
+
+                    if isa.flags().enable_incremental_compilation_cache_checks() {
+                        let actual_info = context.compile(isa)?;
+                        let actual_result = context
+                            .mach_compile_result
+                            .as_ref()
+                            .expect("if compilation succeeds, then mach_compile_result is set");
+                        assert_eq!(*actual_result, mach_compile_result);
+                        assert_eq!(actual_info, info);
+                    }
+
+                    context.mach_compile_result = Some(mach_compile_result);
+                    return Ok(info);
+                }
+            }
+
+            (cache_key_hash, cache_key)
+        };
+
+        let info = context.compile(isa)?;
+
+        let result = context
+            .mach_compile_result
+            .as_ref()
+            .expect("if compilation succeeds, then mach_compile_result is set");
+
+        let _tt = timing::store_incremental_cache();
+        if let Ok(blob) = incremental_cache::serialize_compiled(cache_key, &context.func, result) {
+            if cache_ctx.cache_store.insert(cache_key_hash.0, blob) {
+                cache_ctx.num_cached += 1;
+            }
+        }
+
+        Ok(info)
+    };
+
+    let code_info = cranelift_compile()
+        .map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
+
+    code_buf.resize(code_info.total_size as _, 0);
+    unsafe { context.emit_to_memory(code_buf.as_mut_ptr()) };
+
+    Ok(code_buf)
+}
+
 fn to_flag_value(v: &settings::Value) -> FlagValue {
     match v.kind() {
         settings::SettingKind::Enum => FlagValue::Enum(v.as_enum().unwrap().into()),
@@ -484,7 +575,7 @@ impl Compiler {
         let CompilerContext {
             mut func_translator,
             codegen_context: mut context,
-            mut cache_store,
+            mut cache_ctx,
         } = self.take_context();
 
         context.func = ir::Function::with_name_signature(ExternalName::user(0, 0), host_signature);
@@ -547,11 +638,11 @@ impl Compiler {
         builder.ins().return_(&[]);
         builder.finalize();
 
-        let func = self.finish_trampoline(&mut context, &mut cache_store, isa)?;
+        let func = self.finish_trampoline(&mut context, cache_ctx.as_mut(), isa)?;
         self.save_context(CompilerContext {
             func_translator,
             codegen_context: context,
-            cache_store
+            cache_ctx,
         });
         Ok(func)
     }
@@ -596,7 +687,7 @@ impl Compiler {
         let CompilerContext {
             mut func_translator,
             codegen_context: mut context,
-            mut cache_store,
+            mut cache_ctx,
         } = self.take_context();
 
         context.func =
@@ -626,11 +717,11 @@ impl Compiler {
 
         self.wasm_to_host_load_results(ty, &mut builder, values_vec_ptr_val);
 
-        let func = self.finish_trampoline(&mut context, &mut cache_store, isa)?;
+        let func = self.finish_trampoline(&mut context, cache_ctx.as_mut(), isa)?;
         self.save_context(CompilerContext {
             func_translator,
             codegen_context: context,
-            cache_store,
+            cache_ctx,
         });
         Ok(func)
     }
@@ -725,17 +816,10 @@ impl Compiler {
     fn finish_trampoline(
         &self,
         context: &mut Context,
-        cache_store: &mut InMemoryCache,
+        cache_ctx: Option<&mut IncrementalCacheContext>,
         isa: &dyn TargetIsa,
     ) -> Result<CompiledFunction, CompileError> {
-        //context
-            //.compile_and_emit(isa, &mut code_buf)
-            //.map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
-        let code_info = context
-            .compile_with_cache(isa, cache_store)
-            .map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
-        let mut code_buf: Vec<u8> = vec![0; code_info.total_size as _];
-        unsafe { context.emit_to_memory(code_buf.as_mut_ptr()) };
+        let code_buf = compile(context, isa, cache_ctx)?;
 
         let result = context.mach_compile_result.as_ref().unwrap();
 

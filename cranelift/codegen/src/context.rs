@@ -55,41 +55,6 @@ pub struct Context {
 
     /// Flag: do we want a disassembly with the MachCompileResult?
     pub want_disasm: bool,
-
-    /// TODO
-    pub stats: IncrementalCacheStats,
-}
-
-/// TODO
-#[derive(Default)]
-pub struct IncrementalCacheStats {
-    num_lookups: usize,
-    num_hits: usize,
-    num_cached: usize,
-}
-
-impl IncrementalCacheStats {
-    /// TODO
-    pub fn fuse(&mut self, other: &IncrementalCacheStats) {
-        self.num_lookups += other.num_lookups;
-        self.num_hits += other.num_hits;
-        self.num_cached += other.num_cached;
-    }
-
-    /// TODO
-    pub fn print(&mut self) {
-        eprintln!(
-            //log::debug!(
-            "Incremental compilation cache stats: {}/{} = {}% (hits/lookup)\ncached: {}",
-            self.num_hits,
-            self.num_lookups,
-            (self.num_hits as f32) / (self.num_lookups as f32) * 100.0,
-            self.num_cached
-        );
-        self.num_hits = 0;
-        self.num_lookups = 0;
-        self.num_cached = 0;
-    }
 }
 
 impl Context {
@@ -113,7 +78,6 @@ impl Context {
             loop_analysis: LoopAnalysis::new(),
             mach_compile_result: None,
             want_disasm: false,
-            stats: Default::default(),
         }
     }
 
@@ -214,33 +178,35 @@ impl Context {
 
     /// Compile the function, as in `compile`, but tries to reuse compiled artifacts of former
     /// compilations.
-    ///
-    /// Requires the Cranelift dynamic flag `enable_incremental_compilation_cache` to be enabled.
     #[cfg(feature = "incremental-cache")]
     pub fn compile_with_cache(
         &mut self,
         isa: &dyn TargetIsa,
         cache_store: &mut dyn crate::incremental_cache::CacheStore,
     ) -> CodegenResult<CodeInfo> {
-        if !isa.flags().enable_incremental_compilation_cache() {
-            // If the dynamic flag isn't enabled, compile without any caching involved.
-            return self.compile(isa);
-        }
-
         let (cache_key_hash, cache_key) = {
             let _tt = timing::try_incremental_cache();
 
-            self.stats.num_lookups += 1;
-
-            let (cache_key, cache_key_hash) = crate::incremental_cache::get_cache_key(&self.func);
+            let (cache_key, cache_key_hash) =
+                crate::incremental_cache::compute_cache_key(&self.func);
 
             if let Some(blob) = cache_store.get(cache_key_hash) {
                 if let Ok(mach_compile_result) =
                     crate::incremental_cache::try_finish_recompile(&cache_key, &self.func, &blob)
                 {
                     let info = mach_compile_result.code_info();
+
+                    if isa.flags().enable_incremental_compilation_cache_checks() {
+                        let actual_info = self.compile(isa)?;
+                        let actual_result = self
+                            .mach_compile_result
+                            .as_ref()
+                            .expect("if compilation succeeds, then mach_compile_result is set");
+                        assert_eq!(*actual_result, mach_compile_result);
+                        assert_eq!(actual_info, info);
+                    }
+
                     self.mach_compile_result = Some(mach_compile_result);
-                    self.stats.num_hits += 1;
                     return Ok(info);
                 }
             }
@@ -259,9 +225,7 @@ impl Context {
         if let Ok(blob) =
             crate::incremental_cache::serialize_compiled(cache_key, &self.func, result)
         {
-            if cache_store.insert(cache_key_hash, blob) {
-                self.stats.num_cached += 1;
-            }
+            cache_store.insert(cache_key_hash, blob);
         }
 
         Ok(info)

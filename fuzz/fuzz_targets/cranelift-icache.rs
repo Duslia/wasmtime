@@ -10,7 +10,6 @@ fuzz_target!(|func: SingleFunction| {
     let func = func.0;
 
     let flags = settings::Flags::new(settings::builder());
-    flags.enable_incremental_compilation_cache();
 
     let isa_builder = isa::lookup(Triple::host())
         .map_err(|err| match err {
@@ -23,7 +22,7 @@ fuzz_target!(|func: SingleFunction| {
 
     let isa = isa_builder.finish(flags).unwrap();
 
-    let (cache_key, _cache_key_hash) = icache::get_cache_key(&func);
+    let (cache_key, _cache_key_hash) = icache::compute_cache_key(&func);
 
     let mut context = Context::for_function(func.clone());
     let prev_info = match context.compile(&*isa) {

@@ -231,6 +231,7 @@ pub struct MachBuffer<I: VCodeInst> {
 
 /// A `MachBuffer` once emission is completed: holds generated code and records,
 /// without fixups. This allows the type to be independent of the backend.
+#[derive(PartialEq, Debug)]
 pub struct MachBufferFinalized {
     /// The buffer contents, as raw bytes.
     pub(crate) data: SmallVec<[u8; 1024]>,
@@ -1432,7 +1433,7 @@ struct MachLabelFixup<I: VCodeInst> {
 }
 
 /// A relocation resulting from a compilation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "enable-serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MachReloc {
     /// The offset at which the relocation applies, *relative to the
@@ -1447,7 +1448,7 @@ pub struct MachReloc {
 }
 
 /// A trap record resulting from a compilation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "enable-serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MachTrap {
     /// The offset at which the trap instruction occurs, *relative to the
@@ -1458,7 +1459,7 @@ pub struct MachTrap {
 }
 
 /// A call site record resulting from a compilation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "enable-serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MachCallSite {
     /// The offset of the call's return address, *relative to the containing section*.
@@ -1468,7 +1469,7 @@ pub struct MachCallSite {
 }
 
 /// A source-location mapping resulting from a compilation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MachSrcLoc {
     /// The start of the region of code corresponding to a source location.
     /// This is relative to the start of the function, not to the start of the
@@ -1483,7 +1484,7 @@ pub struct MachSrcLoc {
 }
 
 /// Record of stack map metadata: stack offsets containing references.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "enable-serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MachStackMap {
     /// The code offset at which this stack map applies.

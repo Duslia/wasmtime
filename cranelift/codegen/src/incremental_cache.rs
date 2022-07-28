@@ -7,9 +7,10 @@ use crate::ir::dfg::{BlockData, ValueDataPacked};
 use crate::ir::function::VersionMarker;
 use crate::ir::instructions::InstructionData;
 use crate::ir::{
-    self, Block, Constant, ConstantData, DynamicStackSlot, DynamicStackSlots, ExternalName,
-    FuncRef, Function, Immediate, Inst, JumpTables, Layout, LibCall, SigRef, Signature, SourceLoc,
-    StackSlot, StackSlots, Value, ValueLabel, ValueLabelAssignments, TESTCASE_NAME_LENGTH,
+    self, Block, Constant, ConstantData, DynamicStackSlot, DynamicStackSlots, DynamicTypes,
+    ExternalName, FuncRef, Function, Immediate, Inst, JumpTables, Layout, LibCall, SigRef,
+    Signature, SourceLoc, StackSlot, StackSlots, Value, ValueLabel, ValueLabelAssignments,
+    ValueList, TESTCASE_NAME_LENGTH,
 };
 use crate::machinst::isle::UnwindInst;
 use crate::machinst::{MachBufferFinalized, MachCompileResult};
@@ -21,6 +22,8 @@ use cranelift_entity::{EntityRef as _, SecondaryMap};
 use smallvec::SmallVec;
 
 /// Backing storage for the incremental compilation cache, when enabled.
+// TODO can probably expose the `CacheStore` trait to give full access to cache store
+// implementations.
 #[cfg(feature = "incremental-cache")]
 pub trait CacheStore {
     /// Given a cache key hash, retrieves the associated opaque serialized data.
@@ -36,7 +39,7 @@ pub trait CacheStore {
 /// Hashed `CachedKey`, to use as an identifier when looking up whether a function has already been
 /// compiled or not.
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
-pub struct CacheKeyHash(u64);
+pub struct CacheKeyHash(pub u64);
 
 impl std::fmt::Display for CacheKeyHash {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -48,7 +51,7 @@ impl std::fmt::Display for CacheKeyHash {
 struct CachedFunc {
     cache_key: CacheKey,
     // TODO add compilation parameters too
-    compile_result: CachedMachCompiledResult,
+    compile_result: CachedMachCompileResult,
 }
 
 /// Same as `ValueLabelStart`, but we relocate the `from` source location.
@@ -94,8 +97,10 @@ struct CachedDataFlowGraph {
     // Those fields are the same as in DataFlowGraph
     // --
     insts: PrimaryMap<Inst, InstructionData>,
-    results: SecondaryMap<Inst, Vec<Value>>,
+    results: SecondaryMap<Inst, ValueList>,
     blocks: PrimaryMap<Block, BlockData>,
+    dynamic_types: DynamicTypes,
+    value_lists: Vec<Value>,
     values: PrimaryMap<Value, ValueDataPacked>,
     signatures: PrimaryMap<SigRef, Signature>,
     old_signatures: SecondaryMap<SigRef, Option<Signature>>,
@@ -199,15 +204,13 @@ impl CacheKey {
             })
             .collect();
 
-        let mut results = SecondaryMap::with_capacity(f.dfg.results.capacity());
-        let value_list = &f.dfg.value_lists;
-        for (inst, values) in f.dfg.results.iter() {
-            results[inst] = values.as_slice(value_list).to_vec();
-        }
+        let value_lists = f.dfg.value_lists.internal_data().to_vec();
 
         let dfg = CachedDataFlowGraph {
             insts: f.dfg.insts.clone(),
-            results,
+            results: f.dfg.results.clone(),
+            dynamic_types: f.dfg.dynamic_types.clone(),
+            value_lists,
             blocks: f.dfg.blocks.clone(),
             values: f.dfg.values.clone(),
             signatures: f.dfg.signatures.clone(),
@@ -349,7 +352,9 @@ struct UserExternalName {
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
-struct CachedMachCompiledResult {
+struct CachedMachCompileResult {
+    // These are fields from the `MachCompileResult`.
+    // ---
     buffer: CachedMachBufferFinalized,
     frame_size: u32,
     disasm: Option<String>,
@@ -359,12 +364,20 @@ struct CachedMachCompiledResult {
     bb_starts: Vec<CodeOffset>,
     bb_edges: Vec<(CodeOffset, CodeOffset)>,
 
+    // These are extra fields useful for patching purposes.
+    // ---
     /// Inverted mapping of user external name to `FuncRef`, constructed once to allow patching.
     func_refs: HashMap<UserExternalName, FuncRef>,
 }
 
-impl CachedMachCompiledResult {
-    fn new(func: &Function, mcr: &MachCompileResult, offset: SourceLoc) -> Self {
+impl CachedMachCompileResult {
+    fn new(func: &Function, mcr: &MachCompileResult) -> Self {
+        let offset = func
+            .srclocs
+            .get(Inst::new(0))
+            .cloned()
+            .unwrap_or(SourceLoc::new(0));
+
         let func_refs = func
             .dfg
             .ext_funcs
@@ -443,7 +456,7 @@ impl CachedMachCompiledResult {
 /// Compute a cache key, and hash it on your behalf.
 ///
 /// Since computing the `CacheKey` is a bit expensive, it should be done as least as possible.
-pub fn get_cache_key(func: &Function) -> (CacheKey, CacheKeyHash) {
+pub fn compute_cache_key(func: &Function) -> (CacheKey, CacheKeyHash) {
     let srcloc_offset = func
         .srclocs
         .get(Inst::new(0))
@@ -469,21 +482,14 @@ pub fn serialize_compiled(
     func: &Function,
     result: &MachCompileResult,
 ) -> Result<Vec<u8>, bincode::Error> {
-    let srcloc_offset = func
-        .srclocs
-        .get(Inst::new(0))
-        .cloned()
-        .unwrap_or(SourceLoc::new(0));
-
     let cached = CachedFunc {
         cache_key,
-        compile_result: CachedMachCompiledResult::new(func, result, srcloc_offset),
+        compile_result: CachedMachCompileResult::new(func, result),
     };
-
     bincode::serialize(&cached)
 }
 
-// TODO could the error return an indication why something went wrong?
+// TODO could the error indicate what went wrong?
 /// Given a function that's been precompiled and its entry in the caching storage, try to shortcut
 /// compilation of the given function.
 pub fn try_finish_recompile(

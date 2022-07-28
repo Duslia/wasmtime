@@ -134,6 +134,13 @@ impl<T: EntityRef + ReservedValue> ListPool<T> {
         self.free.clear();
     }
 
+    /// Returns a list of the allocated data in that list.
+    ///
+    /// To be used for serialization purposes.
+    pub fn internal_data(&self) -> &[T] {
+        self.data.as_slice()
+    }
+
     /// Read the length of a list field, if it exists.
     fn len_of(&self, list: &EntityList<T>) -> Option<usize> {
         let idx = list.index as usize;

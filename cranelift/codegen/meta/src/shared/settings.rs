@@ -358,13 +358,12 @@ pub(crate) fn define() -> SettingGroup {
     );
 
     settings.add_bool(
-        "enable_incremental_compilation_cache",
-        "Enable incremental compilation cache.",
+        "enable_incremental_compilation_cache_checks",
+        "Enable additional checks for debugging the incremental compilation cache.",
         r#"
-            Try to reuse artifacts compiled from previous compilations to minimize the compile time
-            spent recompiling the same functions over and over. Very useful in hot-reload use cases
-            with tight development loops, or when sharing lots of code across different
-            modules (e.g. library code).
+            Enables additional checks that are useful during development of the incremental
+            compilation cache. This should be mostly useful for Cranelift hackers, as well as for
+            helping to debug false incremental cache positives for embedders.
 
             This option is disabled by default and requires enabling the "incremental-cache" Cargo
             feature in cranelift-codegen.
