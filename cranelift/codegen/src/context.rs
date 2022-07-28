@@ -176,61 +176,6 @@ impl Context {
         Ok(info)
     }
 
-    /// Compile the function, as in `compile`, but tries to reuse compiled artifacts of former
-    /// compilations.
-    #[cfg(feature = "incremental-cache")]
-    pub fn compile_with_cache(
-        &mut self,
-        isa: &dyn TargetIsa,
-        cache_store: &mut dyn crate::incremental_cache::CacheStore,
-    ) -> CodegenResult<CodeInfo> {
-        let (cache_key_hash, cache_key) = {
-            let _tt = timing::try_incremental_cache();
-
-            let (cache_key, cache_key_hash) =
-                crate::incremental_cache::compute_cache_key(&self.func);
-
-            if let Some(blob) = cache_store.get(cache_key_hash) {
-                if let Ok(mach_compile_result) =
-                    crate::incremental_cache::try_finish_recompile(&cache_key, &self.func, &blob)
-                {
-                    let info = mach_compile_result.code_info();
-
-                    if isa.flags().enable_incremental_compilation_cache_checks() {
-                        let actual_info = self.compile(isa)?;
-                        let actual_result = self
-                            .mach_compile_result
-                            .as_ref()
-                            .expect("if compilation succeeds, then mach_compile_result is set");
-                        assert_eq!(*actual_result, mach_compile_result);
-                        assert_eq!(actual_info, info);
-                    }
-
-                    self.mach_compile_result = Some(mach_compile_result);
-                    return Ok(info);
-                }
-            }
-
-            (cache_key_hash, cache_key)
-        };
-
-        let info = self.compile(isa)?;
-
-        let result = self
-            .mach_compile_result
-            .as_ref()
-            .expect("if compilation succeeds, then mach_compile_result is set");
-
-        let _tt = timing::store_incremental_cache();
-        if let Ok(blob) =
-            crate::incremental_cache::serialize_compiled(cache_key, &self.func, result)
-        {
-            cache_store.insert(cache_key_hash, blob);
-        }
-
-        Ok(info)
-    }
-
     /// Emit machine code directly into raw memory.
     ///
     /// Write all of the function's machine code to the memory at `mem`. The size of the machine

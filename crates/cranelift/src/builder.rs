@@ -8,7 +8,7 @@ use cranelift_codegen::isa;
 use cranelift_codegen::settings::{self, Configurable, SetError};
 use std::fmt;
 use std::sync::Arc;
-use wasmtime_environ::{CompilerBuilder, Setting, SettingKind, CacheStore};
+use wasmtime_environ::{CacheStore, CompilerBuilder, Setting, SettingKind};
 
 struct Builder {
     flags: settings::Builder,
@@ -128,7 +128,10 @@ impl CompilerBuilder for Builder {
             .collect()
     }
 
-    fn enable_incremental_compilation(&mut self, cache_store: Arc<dyn wasmtime_environ::CacheStore>) {
+    fn enable_incremental_compilation(
+        &mut self,
+        cache_store: Arc<dyn wasmtime_environ::CacheStore>,
+    ) {
         self.cache_store = Some(cache_store);
     }
 }

@@ -28,6 +28,9 @@ pub mod types;
 #[cfg(feature = "enable-serde")]
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "incremental-cache")]
+pub(crate) use crate::ir::extname::TESTCASE_NAME_LENGTH;
+
 pub use crate::ir::atomic_rmw_op::AtomicRmwOp;
 pub use crate::ir::builder::{
     InsertBuilder, InstBuilder, InstBuilderBase, InstInserterBase, ReplaceBuilder,
@@ -43,7 +46,6 @@ pub use crate::ir::extfunc::{
     AbiParam, ArgumentExtension, ArgumentPurpose, ExtFuncData, Signature,
 };
 pub use crate::ir::extname::ExternalName;
-pub(crate) use crate::ir::extname::TESTCASE_NAME_LENGTH;
 pub use crate::ir::function::{DisplayFunctionAnnotations, Function};
 pub use crate::ir::globalvalue::GlobalValueData;
 pub use crate::ir::heap::{HeapData, HeapStyle};

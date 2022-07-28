@@ -39,8 +39,8 @@ use wasmtime_environ::{
 mod component;
 
 struct IncrementalCacheContext {
+    #[cfg(feature = "incremental-cache")]
     cache_store: Arc<dyn CacheStore>,
-    num_lookups: usize,
     num_hits: usize,
     num_cached: usize,
 }
@@ -48,7 +48,7 @@ struct IncrementalCacheContext {
 struct CompilerContext {
     func_translator: FuncTranslator,
     codegen_context: Context,
-    cache_ctx: Option<IncrementalCacheContext>,
+    incremental_cache_ctx: Option<IncrementalCacheContext>,
 }
 
 impl Default for CompilerContext {
@@ -56,7 +56,7 @@ impl Default for CompilerContext {
         Self {
             func_translator: FuncTranslator::new(),
             codegen_context: Context::new(),
-            cache_ctx: None,
+            incremental_cache_ctx: None,
         }
     }
 }
@@ -77,24 +77,22 @@ impl Drop for Compiler {
         }
 
         let mut num_hits = 0;
-        let mut num_lookups = 0;
         let mut num_cached = 0;
-
         for ctx in self.contexts.lock().unwrap().iter() {
-            if let Some(ref cache_ctx) = ctx.cache_ctx {
+            if let Some(ref cache_ctx) = ctx.incremental_cache_ctx {
                 num_hits += cache_ctx.num_hits;
-                num_lookups += cache_ctx.num_lookups;
                 num_cached += cache_ctx.num_cached;
             }
         }
 
-        if num_lookups > 0 {
+        let total = num_hits + num_cached;
+        if num_hits + num_cached > 0 {
             eprintln!(
-                // TODO replace with log::debug/trace
+                //log::trace!(
                 "Incremental compilation cache stats: {}/{} = {}% (hits/lookup)\ncached: {}",
                 num_hits,
-                num_lookups,
-                (num_hits as f32) / (num_lookups as f32) * 100.0,
+                total,
+                (num_hits as f32) / (total as f32) * 100.0,
                 num_cached
             );
         }
@@ -123,15 +121,14 @@ impl Compiler {
                 ctx
             })
             .unwrap_or_else(|| CompilerContext {
-                cache_ctx: self
-                    .cache_store
-                    .as_ref()
-                    .map(|cache_store| IncrementalCacheContext {
+                #[cfg(feature = "incremental-cache")]
+                incremental_cache_ctx: self.cache_store.as_ref().map(|cache_store| {
+                    IncrementalCacheContext {
                         cache_store: cache_store.clone(),
-                        num_lookups: 0,
                         num_hits: 0,
                         num_cached: 0,
-                    }),
+                    }
+                }),
                 ..Default::default()
             })
     }
@@ -200,7 +197,7 @@ impl wasmtime_environ::Compiler for Compiler {
         let CompilerContext {
             mut func_translator,
             codegen_context: mut context,
-            mut cache_ctx,
+            incremental_cache_ctx: mut cache_ctx,
         } = self.take_context();
 
         context.func.name = get_func_name(func_index);
@@ -270,7 +267,7 @@ impl wasmtime_environ::Compiler for Compiler {
             &mut func_env,
         )?;
 
-        let code_buf = compile(&mut context, isa, cache_ctx.as_mut())?;
+        let code_buf = compile_maybe_cached(&mut context, isa, cache_ctx.as_mut())?;
 
         let result = context.mach_compile_result.as_ref().unwrap();
 
@@ -325,7 +322,7 @@ impl wasmtime_environ::Compiler for Compiler {
         self.save_context(CompilerContext {
             func_translator,
             codegen_context: context,
-            cache_ctx,
+            incremental_cache_ctx: cache_ctx,
         });
 
         Ok(Box::new(CompiledFunction {
@@ -470,81 +467,69 @@ impl wasmtime_environ::Compiler for Compiler {
     }
 }
 
-fn compile(
-    context: &mut Context,
-    isa: &dyn TargetIsa,
-    cache_ctx: Option<&mut IncrementalCacheContext>,
-) -> Result<Vec<u8>, CompileError> {
-    let mut code_buf = Vec::new();
-    let cache_ctx = match cache_ctx {
-        Some(ctx) => ctx,
-        None => {
-            context
-                .compile_and_emit(isa, &mut code_buf)
-                .map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
-            return Ok(code_buf);
+#[cfg(feature = "incremental-cache")]
+mod incremental_cache {
+    use super::*;
+
+    struct CraneliftCacheStore(Arc<dyn CacheStore>);
+
+    impl cranelift_codegen::incremental_cache::CacheKvStore for CraneliftCacheStore {
+        fn get(&self, key: u64) -> Option<std::borrow::Cow<[u8]>> {
+            self.0.get(key)
         }
-    };
+        fn insert(&mut self, key: u64, val: Vec<u8>) {
+            self.0.insert(key, val);
+        }
+    }
 
-    use cranelift_codegen::incremental_cache;
-    use cranelift_codegen::timing;
-
-    let mut cranelift_compile = || {
-        let (cache_key_hash, cache_key) = {
-            let _tt = timing::try_incremental_cache();
-            cache_ctx.num_lookups += 1;
-
-            let (cache_key, cache_key_hash) = incremental_cache::compute_cache_key(&context.func);
-
-            if let Some(blob) = cache_ctx.cache_store.get(cache_key_hash.0) {
-                if let Ok(mach_compile_result) =
-                    incremental_cache::try_finish_recompile(&cache_key, &context.func, &blob)
-                {
-                    cache_ctx.num_hits += 1;
-                    let info = mach_compile_result.code_info();
-
-                    if isa.flags().enable_incremental_compilation_cache_checks() {
-                        let actual_info = context.compile(isa)?;
-                        let actual_result = context
-                            .mach_compile_result
-                            .as_ref()
-                            .expect("if compilation succeeds, then mach_compile_result is set");
-                        assert_eq!(*actual_result, mach_compile_result);
-                        assert_eq!(actual_info, info);
-                    }
-
-                    context.mach_compile_result = Some(mach_compile_result);
-                    return Ok(info);
-                }
+    pub(crate) fn compile_maybe_cached(
+        context: &mut Context,
+        isa: &dyn TargetIsa,
+        cache_ctx: Option<&mut IncrementalCacheContext>,
+    ) -> Result<Vec<u8>, CompileError> {
+        let mut code_buf = Vec::new();
+        let cache_ctx = match cache_ctx {
+            Some(ctx) => ctx,
+            None => {
+                context
+                    .compile_and_emit(isa, &mut code_buf)
+                    .map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
+                return Ok(code_buf);
             }
-
-            (cache_key_hash, cache_key)
         };
 
-        let info = context.compile(isa)?;
+        let mut cache_store = CraneliftCacheStore(cache_ctx.cache_store.clone());
+        let (code_info, from_cache) = context
+            .compile_with_cache(isa, &mut cache_store)
+            .map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
 
-        let result = context
-            .mach_compile_result
-            .as_ref()
-            .expect("if compilation succeeds, then mach_compile_result is set");
-
-        let _tt = timing::store_incremental_cache();
-        if let Ok(blob) = incremental_cache::serialize_compiled(cache_key, &context.func, result) {
-            if cache_ctx.cache_store.insert(cache_key_hash.0, blob) {
-                cache_ctx.num_cached += 1;
-            }
+        if from_cache {
+            cache_ctx.num_hits += 1;
+        } else {
+            cache_ctx.num_cached += 1;
         }
 
-        Ok(info)
-    };
+        code_buf.resize(code_info.total_size as _, 0);
+        unsafe { context.emit_to_memory(code_buf.as_mut_ptr()) };
 
-    let code_info = cranelift_compile()
+        Ok(code_buf)
+    }
+}
+
+#[cfg(feature = "incremental-cache")]
+use incremental_cache::*;
+
+#[cfg(not(feature = "incremental-cache"))]
+fn compile_maybe_cached(
+    context: &mut Context,
+    isa: &dyn TargetIsa,
+    _cache_ctx: Option<&mut IncrementalCacheContext>,
+) -> Result<Vec<u8>, CompileError> {
+    let mut code_buf = Vec::new();
+    context
+        .compile_and_emit(isa, &mut code_buf)
         .map_err(|error| CompileError::Codegen(pretty_error(&context.func, error)))?;
-
-    code_buf.resize(code_info.total_size as _, 0);
-    unsafe { context.emit_to_memory(code_buf.as_mut_ptr()) };
-
-    Ok(code_buf)
+    return Ok(code_buf);
 }
 
 fn to_flag_value(v: &settings::Value) -> FlagValue {
@@ -575,7 +560,7 @@ impl Compiler {
         let CompilerContext {
             mut func_translator,
             codegen_context: mut context,
-            mut cache_ctx,
+            incremental_cache_ctx: mut cache_ctx,
         } = self.take_context();
 
         context.func = ir::Function::with_name_signature(ExternalName::user(0, 0), host_signature);
@@ -642,7 +627,7 @@ impl Compiler {
         self.save_context(CompilerContext {
             func_translator,
             codegen_context: context,
-            cache_ctx,
+            incremental_cache_ctx: cache_ctx,
         });
         Ok(func)
     }
@@ -687,7 +672,7 @@ impl Compiler {
         let CompilerContext {
             mut func_translator,
             codegen_context: mut context,
-            mut cache_ctx,
+            incremental_cache_ctx: mut cache_ctx,
         } = self.take_context();
 
         context.func =
@@ -721,7 +706,7 @@ impl Compiler {
         self.save_context(CompilerContext {
             func_translator,
             codegen_context: context,
-            cache_ctx,
+            incremental_cache_ctx: cache_ctx,
         });
         Ok(func)
     }
@@ -819,7 +804,7 @@ impl Compiler {
         cache_ctx: Option<&mut IncrementalCacheContext>,
         isa: &dyn TargetIsa,
     ) -> Result<CompiledFunction, CompileError> {
-        let code_buf = compile(context, isa, cache_ctx)?;
+        let code_buf = compile_maybe_cached(context, isa, cache_ctx)?;
 
         let result = context.mach_compile_result.as_ref().unwrap();
 

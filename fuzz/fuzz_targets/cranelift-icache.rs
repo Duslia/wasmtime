@@ -22,7 +22,7 @@ fuzz_target!(|func: SingleFunction| {
 
     let isa = isa_builder.finish(flags).unwrap();
 
-    let (cache_key, _cache_key_hash) = icache::compute_cache_key(&func);
+    let (cache_key, _cache_key_hash) = icache::compute_cache_key(&*isa, &func);
 
     let mut context = Context::for_function(func.clone());
     let prev_info = match context.compile(&*isa) {

@@ -409,8 +409,6 @@ impl Module {
             },
         );
 
-        engine.compiler().print_stats();
-
         // Collect all the function results into a final ELF object.
         let mut obj = engine.compiler().object()?;
         let (funcs, trampolines) =

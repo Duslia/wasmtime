@@ -230,8 +230,9 @@ impl Config {
         Ok(self)
     }
 
-    /// TODO
-    #[cfg(compiler)]
+    /// Enables the incremental compilation cache in Cranelift, using the provided `CacheStore`
+    /// backend for storage.
+    #[cfg(all(feature = "incremental-cache", feature = "cranelift"))]
     pub fn enable_incremental_compilation(
         &mut self,
         cache_store: Arc<dyn CacheStore>,
