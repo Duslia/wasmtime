@@ -9,7 +9,7 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
-cranelift-codegen = { path = "../cranelift/codegen" }
+cranelift-codegen = { path = "../cranelift/codegen", features = ["incremental-cache"] }
 cranelift-reader = { path = "../cranelift/reader" }
 cranelift-wasm = { path = "../cranelift/wasm" }
 cranelift-filetests = { path = "../cranelift/filetests" }
