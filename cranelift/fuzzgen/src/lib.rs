@@ -131,17 +131,14 @@ where
         Ok(ctx.func)
     }
 
-    fn generate_func(mut self) -> Result<Function> {
+    fn generate_func(&mut self) -> Result<Function> {
         let func = FunctionGenerator::new(&mut self.u, &self.config).generate()?;
         self.run_func_passes(func)
     }
 
     pub fn generate_test(mut self) -> Result<TestCase> {
-        let func = FunctionGenerator::new(&mut self.u, &self.config).generate()?;
+        let func = self.generate_func()?;
         let inputs = self.generate_test_inputs(&func.signature)?;
-
-        let func = self.run_func_passes(func)?;
-
         Ok(TestCase { func, inputs })
     }
 }

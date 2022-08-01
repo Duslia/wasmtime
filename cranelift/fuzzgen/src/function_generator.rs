@@ -600,7 +600,7 @@ where
     }
 
     fn generate_funcrefs(&mut self, builder: &mut FunctionBuilder) -> Result<()> {
-        for _ in 0..self.param(&self.config.jump_tables_per_function)? {
+        for _ in 0..self.param(&self.config.funcrefs_per_function)? {
             let (ext_name, sig) = if self.u.arbitrary::<bool>()? {
                 let func_index = self.next_func_index;
                 self.next_func_index = self.next_func_index.wrapping_add(1);
