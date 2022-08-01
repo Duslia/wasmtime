@@ -474,15 +474,15 @@ mod incremental_cache {
     struct CraneliftCacheStore(Arc<dyn CacheStore>);
 
     impl cranelift_codegen::incremental_cache::CacheKvStore for CraneliftCacheStore {
-        fn get(&self, key: u64) -> Option<std::borrow::Cow<[u8]>> {
+        fn get(&self, key: &[u8]) -> Option<std::borrow::Cow<[u8]>> {
             self.0.get(key)
         }
-        fn insert(&mut self, key: u64, val: Vec<u8>) {
+        fn insert(&mut self, key: &[u8], val: Vec<u8>) {
             self.0.insert(key, val);
         }
     }
 
-    pub(crate) fn compile_maybe_cached(
+    pub(super) fn compile_maybe_cached(
         context: &mut Context,
         isa: &dyn TargetIsa,
         cache_ctx: Option<&mut IncrementalCacheContext>,

@@ -517,7 +517,6 @@ dependencies = [
  "criterion",
  "gimli",
  "hashbrown",
- "lazy_static",
  "log",
  "miette",
  "regalloc2",

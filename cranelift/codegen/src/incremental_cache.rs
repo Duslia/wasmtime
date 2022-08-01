@@ -57,7 +57,7 @@ impl Context {
 
             let (cache_key, cache_key_hash) = compute_cache_key(isa, &self.func);
 
-            if let Some(blob) = cache_store.get(cache_key_hash.0) {
+            if let Some(blob) = cache_store.get(&cache_key_hash.0) {
                 if let Ok(mach_compile_result) = try_finish_recompile(&cache_key, &self.func, &blob)
                 {
                     let info = mach_compile_result.code_info();
@@ -89,7 +89,7 @@ impl Context {
 
         let _tt = timing::store_incremental_cache();
         if let Ok(blob) = serialize_compiled(cache_key, &self.func, result) {
-            cache_store.insert(cache_key_hash.0, blob);
+            cache_store.insert(&cache_key_hash.0, blob);
         }
 
         Ok((info, false))
@@ -99,21 +99,21 @@ impl Context {
 /// Backing storage for an incremental compilation cache, when enabled.
 pub trait CacheKvStore {
     /// Given a cache key hash, retrieves the associated opaque serialized data.
-    fn get(&self, key: u64) -> Option<Cow<[u8]>>;
+    fn get(&self, key: &[u8]) -> Option<Cow<[u8]>>;
 
     /// Given a new cache key and a serialized blob obtained from `serialize_compiled`, stores it
     /// in the cache store.
-    fn insert(&mut self, key: u64, val: Vec<u8>);
+    fn insert(&mut self, key: &[u8], val: Vec<u8>);
 }
 
 /// Hashed `CachedKey`, to use as an identifier when looking up whether a function has already been
 /// compiled or not.
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
-pub struct CacheKeyHash(u64);
+pub struct CacheKeyHash([u8; 8]);
 
 impl std::fmt::Display for CacheKeyHash {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.0.fmt(f)
+        i64::from_le_bytes(self.0).fmt(f)
     }
 }
 
@@ -692,7 +692,7 @@ pub fn compute_cache_key(isa: &dyn TargetIsa, func: &Function) -> (CacheKey, Cac
         hasher.finish()
     };
 
-    (cache_key, CacheKeyHash(hash))
+    (cache_key, CacheKeyHash(hash.to_le_bytes()))
 }
 
 /// Given a function that's been successfully compiled, serialize it to a blob that the caller may
