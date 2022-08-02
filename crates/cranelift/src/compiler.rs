@@ -200,7 +200,7 @@ impl wasmtime_environ::Compiler for Compiler {
             incremental_cache_ctx: mut cache_ctx,
         } = self.take_context();
 
-        context.func.name = get_func_name(func_index);
+        context.func.params.name = get_func_name(func_index);
         context.func.signature = func_signature(isa, translation, types, func_index);
         if tunables.generate_native_debuginfo {
             context.func.collect_debug_info();

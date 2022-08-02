@@ -198,7 +198,7 @@ pub fn decorate_function<FW: FuncWriter>(
 // Function spec.
 
 fn write_spec(w: &mut dyn Write, func: &Function) -> fmt::Result {
-    write!(w, "{}{}", func.name, func.signature)
+    write!(w, "{}{}", func.params.name, func.signature)
 }
 
 //----------------------------------------------------------------------
@@ -580,7 +580,7 @@ mod tests {
         let mut f = Function::new();
         assert_eq!(f.to_string(), "function u0:0() fast {\n}\n");
 
-        f.name = ExternalName::testcase("foo");
+        f.params.name = ExternalName::testcase("foo");
         assert_eq!(f.to_string(), "function %foo() fast {\n}\n");
 
         f.create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 4));

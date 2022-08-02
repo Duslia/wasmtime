@@ -60,19 +60,33 @@ impl<'de> Deserialize<'de> for VersionMarker {
     }
 }
 
-/// Functions can be cloned, but it is not a very fast operation.
-/// The clone will have all the same entity numbers as the original.
+/// Function parameters used when creating this function, and that will become applied after
+/// compilation to materialize the final `CompiledCode`.
 #[derive(Clone)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
-pub struct Function {
+pub struct FunctionParameters {
+    /// Name of this function. Mostly used by `.clif` files.
+    pub name: ExternalName,
+}
+
+impl FunctionParameters {
+    /// Creates a new `FunctionParameters` with the given name.
+    pub fn new(name: ExternalName) -> Self {
+        Self { name }
+    }
+
+    fn clear(&mut self) {}
+}
+
+/// Function fields needed when compiling a function.
+#[derive(Clone)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
+pub struct FunctionStencil {
     /// A version marker used to ensure that serialized clif ir is never deserialized with a
     /// different version of Cranelift.
     // Note: This must be the first field to ensure that Serde will deserialize it before
     // attempting to deserialize other fields that are potentially changed between versions.
     pub version_marker: VersionMarker,
-
-    /// Name of this function. Mostly used by `.clif` files.
-    pub name: ExternalName,
 
     /// Signature of this function.
     pub signature: Signature,
@@ -115,28 +129,8 @@ pub struct Function {
     pub stack_limit: Option<ir::GlobalValue>,
 }
 
-impl Function {
-    /// Create a function with the given name and signature.
-    pub fn with_name_signature(name: ExternalName, sig: Signature) -> Self {
-        Self {
-            version_marker: VersionMarker,
-            name,
-            signature: sig,
-            sized_stack_slots: StackSlots::new(),
-            dynamic_stack_slots: DynamicStackSlots::new(),
-            global_values: PrimaryMap::new(),
-            heaps: PrimaryMap::new(),
-            tables: PrimaryMap::new(),
-            jump_tables: PrimaryMap::new(),
-            dfg: DataFlowGraph::new(),
-            layout: Layout::new(),
-            srclocs: SecondaryMap::new(),
-            stack_limit: None,
-        }
-    }
-
-    /// Clear all data structures in this function.
-    pub fn clear(&mut self) {
+impl FunctionStencil {
+    fn clear(&mut self) {
         self.signature.clear(CallConv::Fast);
         self.sized_stack_slots.clear();
         self.dynamic_stack_slots.clear();
@@ -148,11 +142,6 @@ impl Function {
         self.layout.clear();
         self.srclocs.clear();
         self.stack_limit = None;
-    }
-
-    /// Create a new empty, anonymous function with a Fast calling convention.
-    pub fn new() -> Self {
-        Self::with_name_signature(ExternalName::default(), Signature::new(CallConv::Fast))
     }
 
     /// Creates a jump table in the function, to be used by `br_table` instructions.
@@ -215,19 +204,6 @@ impl Function {
     /// Declares a table accessible to the function.
     pub fn create_table(&mut self, data: TableData) -> Table {
         self.tables.push(data)
-    }
-
-    /// Return an object that can display this function with correct ISA-specific annotations.
-    pub fn display(&self) -> DisplayFunction<'_> {
-        DisplayFunction(self, Default::default())
-    }
-
-    /// Return an object that can display this function with correct ISA-specific annotations.
-    pub fn display_with<'a>(
-        &'a self,
-        annotations: DisplayFunctionAnnotations<'a>,
-    ) -> DisplayFunction<'a> {
-        DisplayFunction(self, annotations)
     }
 
     /// Find a presumed unique special-purpose function parameter value.
@@ -354,6 +330,81 @@ impl Function {
     /// Does not include any padding necessary due to offsets
     pub fn fixed_stack_size(&self) -> u32 {
         self.sized_stack_slots.values().map(|ss| ss.size).sum()
+    }
+}
+
+/// Functions can be cloned, but it is not a very fast operation.
+/// The clone will have all the same entity numbers as the original.
+#[derive(Clone)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
+pub struct Function {
+    /// All the fields required for compiling a function, independently of details irrelevant to
+    /// compilation and that are stored in the `FunctionParameters` `params` field instead.
+    pub stencil: FunctionStencil,
+
+    /// All the parameters that can be applied onto the function stencil, that is, that don't
+    /// matter when caching compilation artifacts.
+    pub params: FunctionParameters,
+}
+
+impl core::ops::Deref for Function {
+    type Target = FunctionStencil;
+
+    fn deref(&self) -> &Self::Target {
+        &self.stencil
+    }
+}
+
+impl core::ops::DerefMut for Function {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.stencil
+    }
+}
+
+impl Function {
+    /// Create a function with the given name and signature.
+    pub fn with_name_signature(name: ExternalName, sig: Signature) -> Self {
+        Self {
+            stencil: FunctionStencil {
+                version_marker: VersionMarker,
+                signature: sig,
+                sized_stack_slots: StackSlots::new(),
+                dynamic_stack_slots: DynamicStackSlots::new(),
+                global_values: PrimaryMap::new(),
+                heaps: PrimaryMap::new(),
+                tables: PrimaryMap::new(),
+                jump_tables: PrimaryMap::new(),
+                dfg: DataFlowGraph::new(),
+                layout: Layout::new(),
+                srclocs: SecondaryMap::new(),
+                stack_limit: None,
+            },
+            params: FunctionParameters::new(name),
+        }
+    }
+
+    /// Clear all data structures in this function.
+    pub fn clear(&mut self) {
+        self.stencil.clear();
+        self.params.clear();
+    }
+
+    /// Create a new empty, anonymous function with a Fast calling convention.
+    pub fn new() -> Self {
+        Self::with_name_signature(Default::default(), Signature::new(CallConv::Fast))
+    }
+
+    /// Return an object that can display this function with correct ISA-specific annotations.
+    pub fn display(&self) -> DisplayFunction<'_> {
+        DisplayFunction(self, Default::default())
+    }
+
+    /// Return an object that can display this function with correct ISA-specific annotations.
+    pub fn display_with<'a>(
+        &'a self,
+        annotations: DisplayFunctionAnnotations<'a>,
+    ) -> DisplayFunction<'a> {
+        DisplayFunction(self, annotations)
     }
 }
 

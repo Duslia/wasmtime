@@ -451,9 +451,9 @@ impl<'a> FunctionBuilder<'a> {
         // These parameters count as "user" parameters here because they aren't
         // inserted by the SSABuilder.
         let user_param_count = &mut self.func_ctx.blocks[block].user_param_count;
-        for argtyp in &self.func.signature.params {
+        for argtyp in &self.func.stencil.signature.params {
             *user_param_count += 1;
-            self.func.dfg.append_block_param(block, argtyp.value_type);
+            self.func.stencil.dfg.append_block_param(block, argtyp.value_type);
         }
     }
 
@@ -464,9 +464,9 @@ impl<'a> FunctionBuilder<'a> {
         // These parameters count as "user" parameters here because they aren't
         // inserted by the SSABuilder.
         let user_param_count = &mut self.func_ctx.blocks[block].user_param_count;
-        for argtyp in &self.func.signature.returns {
+        for argtyp in &self.func.stencil.signature.returns {
             *user_param_count += 1;
-            self.func.dfg.append_block_param(block, argtyp.value_type);
+            self.func.stencil.dfg.append_block_param(block, argtyp.value_type);
         }
     }
 

@@ -51,6 +51,11 @@ impl fmt::Display for SourceLoc {
     }
 }
 
+/// Source location relative to another base source location.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
+pub struct RelSourceLoc(u32);
+
 #[cfg(test)]
 mod tests {
     use crate::ir::SourceLoc;

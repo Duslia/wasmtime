@@ -24,7 +24,7 @@ use crate::alloc::string::String;
 use crate::alloc::vec::Vec;
 use crate::binemit::CodeOffset;
 use crate::ir::dfg::{BlockData, ValueDataPacked};
-use crate::ir::function::VersionMarker;
+use crate::ir::function::{FunctionParameters, FunctionStencil, VersionMarker};
 use crate::ir::instructions::InstructionData;
 use crate::ir::{
     self, Block, Constant, ConstantData, ConstantPool, DataFlowGraph, DynamicStackSlot,
@@ -339,19 +339,21 @@ impl CacheKey {
     /// See comment on top of `CacheKey`.
     fn check_from_src(self) -> Function {
         Function {
-            version_marker: self.version_marker,
-            name: Default::default(), // caching is resilient to source locs
-            signature: self.signature,
-            sized_stack_slots: self.sized_stack_slots,
-            dynamic_stack_slots: self.dynamic_stack_slots,
-            global_values: self.global_values,
-            heaps: self.heaps,
-            tables: self.tables,
-            jump_tables: self.jump_tables,
-            dfg: self.dfg.check_from_src(),
-            layout: self.layout,
-            srclocs: Default::default(), // caching is resilient to source locs
-            stack_limit: self.stack_limit,
+            stencil: FunctionStencil {
+                version_marker: self.version_marker,
+                signature: self.signature,
+                sized_stack_slots: self.sized_stack_slots,
+                dynamic_stack_slots: self.dynamic_stack_slots,
+                global_values: self.global_values,
+                heaps: self.heaps,
+                tables: self.tables,
+                jump_tables: self.jump_tables,
+                dfg: self.dfg.check_from_src(),
+                layout: self.layout,
+                srclocs: Default::default(), // caching is resilient to source locs
+                stack_limit: self.stack_limit,
+            },
+            params: FunctionParameters::new(Default::default()), // all the things we're resilient to
         }
     }
 
@@ -736,7 +738,7 @@ pub fn try_finish_recompile(
                 let mach_compile_result = result.compile_result.expand(func, srcloc_offset);
                 return Ok(mach_compile_result);
             } else {
-                eprintln!("{} not read from cache: source mismatch", func.name);
+                eprintln!("{} not read from cache: source mismatch", func.params.name);
 
                 //if cache_key.version_marker != result.cache_key.version_marker {
                 //eprintln!("     because of version marker")
