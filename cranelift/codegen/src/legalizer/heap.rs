@@ -213,6 +213,7 @@ fn cast_offset_to_pointer_ty(
     // value as the address
     let loc = pos.srcloc();
     pos.func
+        .stencil
         .dfg
         .add_value_label_alias(extended_offset, loc, offset);
 

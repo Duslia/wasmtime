@@ -8,20 +8,22 @@ use crate::ir::extfunc::ExtFuncData;
 use crate::ir::instructions::{BranchInfo, CallInfo, InstructionData};
 use crate::ir::{types, ConstantData, ConstantPool, Immediate};
 use crate::ir::{
-    Block, DynamicType, FuncRef, Inst, SigRef, Signature, SourceLoc, Type, Value,
-    ValueLabelAssignments, ValueList, ValueListPool,
+    Block, DynamicType, FuncRef, Inst, SigRef, Signature, Type, Value, ValueLabelAssignments,
+    ValueList, ValueListPool,
 };
 use crate::packed_option::ReservedValue;
 use crate::write::write_operands;
-use crate::HashMap;
 use core::fmt;
 use core::iter;
 use core::mem;
 use core::ops::{Index, IndexMut};
 use core::u16;
 
+use alloc::collections::BTreeMap;
 #[cfg(feature = "enable-serde")]
 use serde::{Deserialize, Serialize};
+
+use super::RelSourceLoc;
 
 /// A data flow graph defines all instructions and basic blocks in a function as well as
 /// the data flow dependencies between them. The DFG also tracks values which can be either
@@ -76,7 +78,7 @@ pub struct DataFlowGraph {
     pub ext_funcs: PrimaryMap<FuncRef, ExtFuncData>,
 
     /// Saves Value labels.
-    pub values_labels: Option<HashMap<Value, ValueLabelAssignments>>,
+    pub values_labels: Option<BTreeMap<Value, ValueLabelAssignments>>,
 
     /// Constants used within the function
     pub constants: ConstantPool,
@@ -154,13 +156,13 @@ impl DataFlowGraph {
     /// Starts collection of debug information.
     pub fn collect_debug_info(&mut self) {
         if self.values_labels.is_none() {
-            self.values_labels = Some(HashMap::new());
+            self.values_labels = Some(Default::default());
         }
     }
 
     /// Inserts a `ValueLabelAssignments::Alias` for `to_alias` if debug info
     /// collection is enabled.
-    pub fn add_value_label_alias(&mut self, to_alias: Value, from: SourceLoc, value: Value) {
+    pub fn add_value_label_alias(&mut self, to_alias: Value, from: RelSourceLoc, value: Value) {
         if let Some(values_labels) = self.values_labels.as_mut() {
             values_labels.insert(to_alias, ir::ValueLabelAssignments::Alias { from, value });
         }

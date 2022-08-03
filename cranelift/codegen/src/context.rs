@@ -19,7 +19,7 @@ use crate::isa::TargetIsa;
 use crate::legalizer::simple_legalize;
 use crate::licm::do_licm;
 use crate::loop_analysis::LoopAnalysis;
-use crate::machinst::MachCompileResult;
+use crate::machinst::{MachCompileResult, MachCompileResultBase, Stencil};
 use crate::nan_canonicalization::do_nan_canonicalization;
 use crate::remove_constant_phis::do_remove_constant_phis;
 use crate::result::CodegenResult;
@@ -129,6 +129,16 @@ impl Context {
     ///
     /// Returns information about the function's code and read-only data.
     pub fn compile(&mut self, isa: &dyn TargetIsa) -> CodegenResult<CodeInfo> {
+        let stencil = self.compile_stencil(isa)?;
+        let info = stencil.code_info();
+        self.mach_compile_result = Some(stencil.apply_params(&self.func.params));
+        Ok(info)
+    }
+
+    pub(crate) fn compile_stencil(
+        &mut self,
+        isa: &dyn TargetIsa,
+    ) -> CodegenResult<MachCompileResultBase<Stencil>> {
         let _tt = timing::compile();
 
         self.verify_if(isa)?;
@@ -169,11 +179,7 @@ impl Context {
             self.simple_gvn(isa)?;
         }
 
-        let result = isa.compile_function(&self.func, self.want_disasm)?;
-
-        let info = result.code_info();
-        self.mach_compile_result = Some(result);
-        Ok(info)
+        isa.compile_function(&self.func, self.want_disasm)
     }
 
     /// Emit machine code directly into raw memory.

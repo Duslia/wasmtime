@@ -3,7 +3,7 @@
 use regalloc2::Allocation;
 
 use crate::binemit::{CodeOffset, Reloc, StackMap};
-use crate::ir::types::*;
+use crate::ir::{types::*, RelSourceLoc};
 use crate::ir::{LibCall, MemFlags, TrapCode};
 use crate::isa::aarch64::inst::*;
 use crate::machinst::{ty_bits, Reg, RegClass, Writable};
@@ -617,7 +617,7 @@ pub struct EmitState {
     /// Safepoint stack map for upcoming instruction, as provided to `pre_safepoint()`.
     stack_map: Option<StackMap>,
     /// Current source-code location corresponding to instruction to be emitted.
-    cur_srcloc: SourceLoc,
+    cur_srcloc: RelSourceLoc,
     /// Is code generated for the SpiderMonkey WebAssembly convention.
     is_baldrdash_target: bool,
 }
@@ -628,7 +628,7 @@ impl MachInstEmitState<Inst> for EmitState {
             virtual_sp_offset: 0,
             nominal_sp_to_fp: abi.frame_size() as i64,
             stack_map: None,
-            cur_srcloc: SourceLoc::default(),
+            cur_srcloc: Default::default(),
             is_baldrdash_target: abi.call_conv().extends_baldrdash(),
         }
     }
@@ -637,7 +637,7 @@ impl MachInstEmitState<Inst> for EmitState {
         self.stack_map = Some(stack_map);
     }
 
-    fn pre_sourceloc(&mut self, srcloc: SourceLoc) {
+    fn pre_sourceloc(&mut self, srcloc: RelSourceLoc) {
         self.cur_srcloc = srcloc;
     }
 }
@@ -651,7 +651,7 @@ impl EmitState {
         self.stack_map = None;
     }
 
-    fn cur_srcloc(&self) -> SourceLoc {
+    fn cur_srcloc(&self) -> RelSourceLoc {
         self.cur_srcloc
     }
 }
@@ -957,7 +957,7 @@ impl MachInstEmit for Inst {
                 };
 
                 let srcloc = state.cur_srcloc();
-                if srcloc != SourceLoc::default() && !flags.notrap() {
+                if !srcloc.is_default() && !flags.notrap() {
                     // Register the offset at which the actual load instruction starts.
                     sink.add_trap(TrapCode::HeapOutOfBounds);
                 }
@@ -1077,7 +1077,7 @@ impl MachInstEmit for Inst {
                 };
 
                 let srcloc = state.cur_srcloc();
-                if srcloc != SourceLoc::default() && !flags.notrap() {
+                if !srcloc.is_default() && !flags.notrap() {
                     // Register the offset at which the actual store instruction starts.
                     sink.add_trap(TrapCode::HeapOutOfBounds);
                 }
@@ -1154,7 +1154,7 @@ impl MachInstEmit for Inst {
                 let rt2 = allocs.next(rt2);
                 let mem = mem.with_allocs(&mut allocs);
                 let srcloc = state.cur_srcloc();
-                if srcloc != SourceLoc::default() && !flags.notrap() {
+                if !srcloc.is_default() && !flags.notrap() {
                     // Register the offset at which the actual store instruction starts.
                     sink.add_trap(TrapCode::HeapOutOfBounds);
                 }
@@ -1186,7 +1186,7 @@ impl MachInstEmit for Inst {
                 let rt2 = allocs.next(rt2.to_reg());
                 let mem = mem.with_allocs(&mut allocs);
                 let srcloc = state.cur_srcloc();
-                if srcloc != SourceLoc::default() && !flags.notrap() {
+                if !srcloc.is_default() && !flags.notrap() {
                     // Register the offset at which the actual load instruction starts.
                     sink.add_trap(TrapCode::HeapOutOfBounds);
                 }
@@ -1226,7 +1226,7 @@ impl MachInstEmit for Inst {
                 let mem = mem.with_allocs(&mut allocs);
                 let srcloc = state.cur_srcloc();
 
-                if srcloc != SourceLoc::default() && !flags.notrap() {
+                if !srcloc.is_default() && !flags.notrap() {
                     // Register the offset at which the actual load instruction starts.
                     sink.add_trap(TrapCode::HeapOutOfBounds);
                 }
@@ -1272,7 +1272,7 @@ impl MachInstEmit for Inst {
                 let mem = mem.with_allocs(&mut allocs);
                 let srcloc = state.cur_srcloc();
 
-                if srcloc != SourceLoc::default() && !flags.notrap() {
+                if !srcloc.is_default() && !flags.notrap() {
                     // Register the offset at which the actual store instruction starts.
                     sink.add_trap(TrapCode::HeapOutOfBounds);
                 }
@@ -1411,7 +1411,7 @@ impl MachInstEmit for Inst {
                 // again:
                 sink.bind_label(again_label);
                 let srcloc = state.cur_srcloc();
-                if srcloc != SourceLoc::default() {
+                if !srcloc.is_default() {
                     sink.add_trap(TrapCode::HeapOutOfBounds);
                 }
                 sink.put4(enc_ldaxr(ty, x27wr, x25)); // ldaxr x27, [x25]
@@ -1535,7 +1535,7 @@ impl MachInstEmit for Inst {
                 }
 
                 let srcloc = state.cur_srcloc();
-                if srcloc != SourceLoc::default() {
+                if !srcloc.is_default() {
                     sink.add_trap(TrapCode::HeapOutOfBounds);
                 }
                 if op == AtomicRMWLoopOp::Xchg {
@@ -1597,7 +1597,7 @@ impl MachInstEmit for Inst {
                 // again:
                 sink.bind_label(again_label);
                 let srcloc = state.cur_srcloc();
-                if srcloc != SourceLoc::default() {
+                if !srcloc.is_default() {
                     sink.add_trap(TrapCode::HeapOutOfBounds);
                 }
                 // ldaxr x27, [x25]
@@ -1624,7 +1624,7 @@ impl MachInstEmit for Inst {
                 sink.use_label_at_offset(br_out_offset, out_label, LabelUse::Branch19);
 
                 let srcloc = state.cur_srcloc();
-                if srcloc != SourceLoc::default() {
+                if !srcloc.is_default() {
                     sink.add_trap(TrapCode::HeapOutOfBounds);
                 }
                 sink.put4(enc_stlxr(ty, x24wr, x28, x25)); // stlxr w24, x28, [x25]
@@ -2637,7 +2637,7 @@ impl MachInstEmit for Inst {
                 let (q, size) = size.enc_size();
 
                 let srcloc = state.cur_srcloc();
-                if srcloc != SourceLoc::default() && !flags.notrap() {
+                if !srcloc.is_default() && !flags.notrap() {
                     // Register the offset at which the actual load instruction starts.
                     sink.add_trap(TrapCode::HeapOutOfBounds);
                 }

@@ -3,8 +3,8 @@ use crate::ssa::{SSABuilder, SideEffects};
 use crate::variable::Variable;
 use cranelift_codegen::cursor::{Cursor, FuncCursor};
 use cranelift_codegen::entity::{EntitySet, SecondaryMap};
-use cranelift_codegen::ir;
 use cranelift_codegen::ir::condcodes::IntCC;
+use cranelift_codegen::ir::{self, RelSourceLoc};
 use cranelift_codegen::ir::{
     types, AbiParam, Block, DataFlowGraph, DynamicStackSlot, DynamicStackSlotData, ExtFuncData,
     ExternalName, FuncRef, Function, GlobalValue, GlobalValueData, Heap, HeapData, Inst,
@@ -111,7 +111,7 @@ impl<'short, 'long> InstBuilderBase<'short> for FuncInstBuilder<'short, 'long> {
         self.builder.func.dfg.make_inst_results(inst, ctrl_typevar);
         self.builder.func.layout.append_inst(inst, self.block);
         if !self.builder.srcloc.is_default() {
-            self.builder.func.srclocs[inst] = self.builder.srcloc;
+            self.builder.func.set_srcloc(inst, self.builder.srcloc);
         }
 
         if data.opcode().is_branch() {
@@ -346,11 +346,11 @@ impl<'a> FunctionBuilder<'a> {
     ///
     /// This will not do anything unless `func.dfg.collect_debug_info` is called first.
     pub fn set_val_label(&mut self, val: Value, label: ValueLabel) {
-        if let Some(values_labels) = self.func.dfg.values_labels.as_mut() {
-            use crate::hash_map::Entry;
+        if let Some(values_labels) = self.func.stencil.dfg.values_labels.as_mut() {
+            use alloc::collections::btree_map::Entry;
 
             let start = ValueLabelStart {
-                from: self.srcloc,
+                from: RelSourceLoc::from_base_offset(self.func.params.base_srcloc(), self.srcloc),
                 label,
             };
 
@@ -453,7 +453,10 @@ impl<'a> FunctionBuilder<'a> {
         let user_param_count = &mut self.func_ctx.blocks[block].user_param_count;
         for argtyp in &self.func.stencil.signature.params {
             *user_param_count += 1;
-            self.func.stencil.dfg.append_block_param(block, argtyp.value_type);
+            self.func
+                .stencil
+                .dfg
+                .append_block_param(block, argtyp.value_type);
         }
     }
 
@@ -466,7 +469,10 @@ impl<'a> FunctionBuilder<'a> {
         let user_param_count = &mut self.func_ctx.blocks[block].user_param_count;
         for argtyp in &self.func.stencil.signature.returns {
             *user_param_count += 1;
-            self.func.stencil.dfg.append_block_param(block, argtyp.value_type);
+            self.func
+                .stencil
+                .dfg
+                .append_block_param(block, argtyp.value_type);
         }
     }
 

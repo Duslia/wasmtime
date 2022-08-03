@@ -45,7 +45,8 @@
 //! ```
 
 use crate::binemit::{Addend, CodeInfo, CodeOffset, Reloc, StackMap};
-use crate::ir::{DynamicStackSlot, SourceLoc, StackSlot, Type};
+use crate::ir::function::FunctionParameters;
+use crate::ir::{DynamicStackSlot, RelSourceLoc, StackSlot, Type};
 use crate::result::CodegenResult;
 use crate::settings::Flags;
 use crate::value_label::ValueLabelsRanges;
@@ -267,15 +268,15 @@ pub trait MachInstEmitState<I: MachInst>: Default + Clone + Debug {
     fn pre_safepoint(&mut self, _stack_map: StackMap) {}
     /// Update the emission state to indicate instructions are associated with a
     /// particular SourceLoc.
-    fn pre_sourceloc(&mut self, _srcloc: SourceLoc) {}
+    fn pre_sourceloc(&mut self, _srcloc: RelSourceLoc) {}
 }
 
 /// The result of a `MachBackend::compile_function()` call. Contains machine
 /// code (as bytes) and a disassembly, if requested.
 #[derive(PartialEq, Debug)]
-pub struct MachCompileResult {
+pub struct MachCompileResultBase<T: CompilePhase> {
     /// Machine code.
-    pub buffer: MachBufferFinalized,
+    pub buffer: MachBufferFinalized<T>,
     /// Size of stack frame, in bytes.
     pub frame_size: u32,
     /// Disassembly, if requested.
@@ -300,7 +301,22 @@ pub struct MachCompileResult {
     pub bb_edges: Vec<(CodeOffset, CodeOffset)>,
 }
 
-impl MachCompileResult {
+impl MachCompileResultBase<Stencil> {
+    pub(crate) fn apply_params(self, params: &FunctionParameters) -> MachCompileResult {
+        MachCompileResult {
+            buffer: self.buffer.apply_params(params),
+            frame_size: self.frame_size,
+            disasm: self.disasm,
+            value_labels_ranges: self.value_labels_ranges,
+            sized_stackslot_offsets: self.sized_stackslot_offsets,
+            dynamic_stackslot_offsets: self.dynamic_stackslot_offsets,
+            bb_starts: self.bb_starts,
+            bb_edges: self.bb_edges,
+        }
+    }
+}
+
+impl<T: CompilePhase> MachCompileResultBase<T> {
     /// Get a `CodeInfo` describing section sizes from this compilation result.
     pub fn code_info(&self) -> CodeInfo {
         CodeInfo {
@@ -308,6 +324,8 @@ impl MachCompileResult {
         }
     }
 }
+
+pub type MachCompileResult = MachCompileResultBase<Final>;
 
 /// An object that can be used to create the text section of an executable.
 ///

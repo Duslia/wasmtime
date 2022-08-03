@@ -2249,7 +2249,7 @@ impl<'a> Parser<'a> {
             .expect("duplicate inst references created");
 
         if !srcloc.is_default() {
-            ctx.function.srclocs[inst] = srcloc;
+            ctx.function.set_srcloc(inst, srcloc);
         }
 
         if results.len() != num_results {

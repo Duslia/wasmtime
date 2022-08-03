@@ -254,7 +254,7 @@ fn decorate_block<FW: FuncWriter>(
     block: Block,
 ) -> fmt::Result {
     // Indent all instructions if any srclocs are present.
-    let indent = if func.srclocs.is_empty() { 4 } else { 36 };
+    let indent = if func.rel_srclocs().is_empty() { 4 } else { 36 };
 
     func_w.write_block_header(w, func, block, indent)?;
     for a in func.dfg.block_params(block).iter().cloned() {
@@ -335,7 +335,7 @@ fn write_instruction(
     let mut s = String::with_capacity(16);
 
     // Source location goes first.
-    let srcloc = func.srclocs[inst];
+    let srcloc = func.srcloc(inst);
     if !srcloc.is_default() {
         write!(s, "{} ", srcloc)?;
     }

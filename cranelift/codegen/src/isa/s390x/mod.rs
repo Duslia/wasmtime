@@ -7,7 +7,8 @@ use crate::isa::s390x::settings as s390x_settings;
 use crate::isa::unwind::systemv::RegisterMappingError;
 use crate::isa::{Builder as IsaBuilder, TargetIsa};
 use crate::machinst::{
-    compile, MachCompileResult, MachTextSectionBuilder, Reg, TextSectionBuilder, VCode,
+    compile, MachCompileResult, MachCompileResultBase, MachTextSectionBuilder, Reg, Stencil,
+    TextSectionBuilder, VCode,
 };
 use crate::result::CodegenResult;
 use crate::settings as shared_settings;
@@ -68,7 +69,7 @@ impl TargetIsa for S390xBackend {
         &self,
         func: &Function,
         want_disasm: bool,
-    ) -> CodegenResult<MachCompileResult> {
+    ) -> CodegenResult<MachCompileResultBase<Stencil>> {
         let flags = self.flags();
         let (vcode, regalloc_result) = self.compile_vcode(func, flags.clone())?;
 
@@ -83,7 +84,7 @@ impl TargetIsa for S390xBackend {
             log::debug!("disassembly:\n{}", disasm);
         }
 
-        Ok(MachCompileResult {
+        Ok(MachCompileResultBase {
             buffer,
             frame_size,
             disasm: emit_result.disasm,

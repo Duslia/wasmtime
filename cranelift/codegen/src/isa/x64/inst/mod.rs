@@ -1,7 +1,7 @@
 //! This module defines x86_64-specific machine instruction types.
 
 use crate::binemit::{Addend, CodeOffset, Reloc, StackMap};
-use crate::ir::{types, ExternalName, Opcode, SourceLoc, TrapCode, Type};
+use crate::ir::{types, ExternalName, Opcode, RelSourceLoc, TrapCode, Type};
 use crate::isa::x64::abi::X64ABIMachineSpec;
 use crate::isa::x64::inst::regs::pretty_print_reg;
 use crate::isa::x64::settings as x64_settings;
@@ -2453,7 +2453,7 @@ pub struct EmitState {
     /// Safepoint stack map for upcoming instruction, as provided to `pre_safepoint()`.
     stack_map: Option<StackMap>,
     /// Current source location.
-    cur_srcloc: SourceLoc,
+    cur_srcloc: RelSourceLoc,
 }
 
 /// Constant state used during emissions of a sequence of instructions.
@@ -2494,7 +2494,7 @@ impl MachInstEmitState<Inst> for EmitState {
             virtual_sp_offset: 0,
             nominal_sp_to_fp: abi.frame_size() as i64,
             stack_map: None,
-            cur_srcloc: SourceLoc::default(),
+            cur_srcloc: Default::default(),
         }
     }
 
@@ -2502,7 +2502,7 @@ impl MachInstEmitState<Inst> for EmitState {
         self.stack_map = Some(stack_map);
     }
 
-    fn pre_sourceloc(&mut self, srcloc: SourceLoc) {
+    fn pre_sourceloc(&mut self, srcloc: RelSourceLoc) {
         self.cur_srcloc = srcloc;
     }
 }

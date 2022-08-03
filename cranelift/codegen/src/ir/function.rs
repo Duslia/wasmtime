@@ -27,6 +27,8 @@ use serde::ser::Serializer;
 #[cfg(feature = "enable-serde")]
 use serde::{Deserialize, Serialize};
 
+use super::{RelSourceLoc, SourceLoc};
+
 /// A version marker used to ensure that serialized clif ir is never deserialized with a
 /// different version of Cranelift.
 #[derive(Copy, Clone, Debug, PartialEq, Hash)]
@@ -67,15 +69,32 @@ impl<'de> Deserialize<'de> for VersionMarker {
 pub struct FunctionParameters {
     /// Name of this function. Mostly used by `.clif` files.
     pub name: ExternalName,
+
+    /// The first `SourceLoc` appearing in the function, serving as a base for every relative
+    /// source loc in the function.
+    base_srcloc: Option<SourceLoc>,
 }
 
 impl FunctionParameters {
     /// Creates a new `FunctionParameters` with the given name.
     pub fn new(name: ExternalName) -> Self {
-        Self { name }
+        Self {
+            name,
+            base_srcloc: None,
+        }
     }
 
-    fn clear(&mut self) {}
+    /// Returns the base `SourceLoc`.
+    ///
+    /// Panics if the base source location was never set.
+    pub fn base_srcloc(&self) -> SourceLoc {
+        self.base_srcloc
+            .expect("base srcloc must be set at this point")
+    }
+
+    fn clear(&mut self) {
+        self.base_srcloc = None;
+    }
 }
 
 /// Function fields needed when compiling a function.
@@ -119,7 +138,7 @@ pub struct FunctionStencil {
     ///
     /// Track the original source location for each instruction. The source locations are not
     /// interpreted by Cranelift, only preserved.
-    pub srclocs: SourceLocs,
+    pub(crate) srclocs: SourceLocs, // TODO(bnjbvr) remove the pub(crate))
 
     /// An optional global value which represents an expression evaluating to
     /// the stack limit for this function. This `GlobalValue` will be
@@ -331,6 +350,11 @@ impl FunctionStencil {
     pub fn fixed_stack_size(&self) -> u32 {
         self.sized_stack_slots.values().map(|ss| ss.size).sum()
     }
+
+    /// Returns the list of relative source locations for this function.
+    pub fn rel_srclocs(&self) -> &SecondaryMap<Inst, RelSourceLoc> {
+        &self.srclocs
+    }
 }
 
 /// Functions can be cloned, but it is not a very fast operation.
@@ -405,6 +429,25 @@ impl Function {
         annotations: DisplayFunctionAnnotations<'a>,
     ) -> DisplayFunction<'a> {
         DisplayFunction(self, annotations)
+    }
+
+    /// Sets an absolute source location for the given instruction.
+    pub fn set_srcloc(&mut self, inst: Inst, srcloc: SourceLoc) {
+        if self.params.base_srcloc.is_none() {
+            self.params.base_srcloc = Some(srcloc);
+        }
+        self.stencil.srclocs[inst] =
+            RelSourceLoc::from_base_offset(self.params.base_srcloc.unwrap(), srcloc);
+    }
+
+    /// Returns an absolute source location for the given instruction.
+    pub fn srcloc(&self, inst: Inst) -> SourceLoc {
+        self.stencil.srclocs[inst].expand(self.params.base_srcloc())
+    }
+
+    /// Sets a relative source location for the given instruction.
+    pub(crate) fn set_rel_srcloc(&mut self, inst: Inst, srcloc: RelSourceLoc) {
+        self.stencil.srclocs[inst] = srcloc;
     }
 }
 

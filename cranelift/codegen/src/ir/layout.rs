@@ -918,7 +918,7 @@ mod tests {
             self.pos = pos;
         }
 
-        fn srcloc(&self) -> SourceLoc {
+        fn srcloc(&self) -> RelSourceLoc {
             unimplemented!()
         }
 

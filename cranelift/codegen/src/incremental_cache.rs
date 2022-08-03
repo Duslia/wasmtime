@@ -27,22 +27,20 @@ use crate::ir::dfg::{BlockData, ValueDataPacked};
 use crate::ir::function::{FunctionParameters, FunctionStencil, VersionMarker};
 use crate::ir::instructions::InstructionData;
 use crate::ir::{
-    self, Block, ConstantData, ConstantPool, DataFlowGraph, DynamicStackSlot,
-    DynamicStackSlots, DynamicTypes, ExtFuncData, ExternalName, FuncRef, Function, Immediate, Inst,
-    JumpTables, Layout, LibCall, SigRef, Signature, SourceLoc, StackSlot, StackSlots, Value,
-    ValueLabel, ValueLabelAssignments, ValueLabelStart, ValueList, TESTCASE_NAME_LENGTH,
+    self, Block, ConstantData, ConstantPool, DataFlowGraph, DynamicStackSlot, DynamicStackSlots,
+    DynamicTypes, ExtFuncData, ExternalName, FuncRef, Function, Immediate, Inst, JumpTables,
+    Layout, LibCall, RelSourceLoc, SigRef, Signature, StackSlot, StackSlots, Value,
+    ValueLabelAssignments, ValueList, TESTCASE_NAME_LENGTH,
 };
-use crate::machinst::isle::UnwindInst;
-use crate::machinst::{MachBufferFinalized, MachCompileResult};
+use crate::machinst::{MachBufferFinalized, MachCompileResultBase, Stencil};
+use crate::ValueLabelsRanges;
 use crate::{binemit::CodeInfo, isa::TargetIsa, timing, CodegenResult};
 use crate::{Context, HashMap};
-use crate::{MachCallSite, MachReloc, MachSrcLoc, MachStackMap, MachTrap, ValueLabelsRanges};
 use alloc::borrow::{Cow, ToOwned as _};
 use alloc::collections::BTreeMap;
 use alloc::string::ToString as _;
-use cranelift_entity::{EntityRef as _, SecondaryMap};
+use cranelift_entity::SecondaryMap;
 use cranelift_entity::{ListPool, PrimaryMap};
-use smallvec::SmallVec;
 
 impl Context {
     /// Compile the function, as in `compile`, but tries to reuse compiled artifacts from former
@@ -58,9 +56,9 @@ impl Context {
             let (cache_key, cache_key_hash) = compute_cache_key(isa, &self.func);
 
             if let Some(blob) = cache_store.get(&cache_key_hash.0) {
-                if let Ok(mach_compile_result) = try_finish_recompile(&cache_key, &self.func, &blob)
-                {
-                    let info = mach_compile_result.code_info();
+                if let Ok(stencil) = try_finish_recompile(&cache_key, &self.func, &blob) {
+                    let info = stencil.code_info();
+                    let compile_result = stencil.apply_params(&self.func.params);
 
                     if isa.flags().enable_incremental_compilation_cache_checks() {
                         let actual_info = self.compile(isa)?;
@@ -68,11 +66,11 @@ impl Context {
                             .mach_compile_result
                             .as_ref()
                             .expect("if compilation succeeds, then mach_compile_result is set");
-                        assert_eq!(*actual_result, mach_compile_result);
+                        assert_eq!(*actual_result, compile_result);
                         assert_eq!(actual_info, info);
                     }
 
-                    self.mach_compile_result = Some(mach_compile_result);
+                    self.mach_compile_result = Some(compile_result);
                     return Ok((info, true));
                 }
             }
@@ -80,17 +78,17 @@ impl Context {
             (cache_key_hash, cache_key)
         };
 
-        let info = self.compile(isa)?;
+        let stencil = self.compile_stencil(isa)?;
+
+        let _tt = timing::store_incremental_cache();
+        if let Ok(blob) = serialize_compiled(cache_key, &self.func, &stencil) {
+            cache_store.insert(&cache_key_hash.0, blob);
+        }
 
         let result = self
             .mach_compile_result
-            .as_ref()
-            .expect("if compilation succeeds, then mach_compile_result is set");
-
-        let _tt = timing::store_incremental_cache();
-        if let Ok(blob) = serialize_compiled(cache_key, &self.func, result) {
-            cache_store.insert(&cache_key_hash.0, blob);
-        }
+            .insert(stencil.apply_params(&self.func.params));
+        let info = result.code_info();
 
         Ok((info, false))
     }
@@ -121,47 +119,6 @@ impl std::fmt::Display for CacheKeyHash {
 struct CachedFunc {
     cache_key: CacheKey,
     compile_result: CachedMachCompileResult,
-}
-
-/// Same as `ValueLabelStart`, but we relocate the `from` source location.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Hash)]
-struct CachedValueLabelStart {
-    from: RelSourceLoc,
-    label: ValueLabel,
-}
-
-impl CachedValueLabelStart {
-    #[allow(dead_code)]
-    /// Not intended for use; see comment on top of `CacheKey`.
-    fn check_from_src(self) -> ValueLabelStart {
-        ValueLabelStart {
-            from: self.from.expand(SourceLoc::new(0)),
-            label: self.label,
-        }
-    }
-}
-
-/// Same as `ValueLabelAssignments`, but we relocate the `from` source location.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Hash)]
-enum CachedValueLabelAssignments {
-    Starts(alloc::vec::Vec<CachedValueLabelStart>),
-    Alias { from: RelSourceLoc, value: Value },
-}
-
-impl CachedValueLabelAssignments {
-    #[allow(dead_code)]
-    /// Not intended for use; see comment on top of `CacheKey`.
-    fn check_from_src(self) -> ValueLabelAssignments {
-        match self {
-            CachedValueLabelAssignments::Starts(vec) => {
-                ValueLabelAssignments::Starts(vec.into_iter().map(|v| v.check_from_src()).collect())
-            }
-            CachedValueLabelAssignments::Alias { from, value } => ValueLabelAssignments::Alias {
-                from: from.expand(SourceLoc::new(0)),
-                value,
-            },
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -225,11 +182,11 @@ struct CachedDataFlowGraph {
     old_signatures: SecondaryMap<SigRef, Option<Signature>>,
     immediates: PrimaryMap<Immediate, ConstantData>,
     constants: ConstantPool,
+    values_labels: Option<BTreeMap<Value, ValueLabelAssignments>>,
 
     // --
     // Fields that we tweaked for caching
     // --
-    values_labels: Option<BTreeMap<Value, CachedValueLabelAssignments>>,
     /// Same as `DataFlowGraph::ext_funcs`, but we remove the identifying fields of the
     /// `ExternalName` so two calls to external user functions appear the same and end up in the
     /// same cache bucket.
@@ -254,12 +211,7 @@ impl CachedDataFlowGraph {
                 .into_iter()
                 .map(|(_k, v)| v.check_from_src())
                 .collect(),
-            values_labels: self.values_labels.map(|btree| {
-                btree
-                    .into_iter()
-                    .map(|(k, v)| (k, v.check_from_src()))
-                    .collect()
-            }),
+            values_labels: self.values_labels,
             constants: self.constants,
             immediates: self.immediates,
         }
@@ -286,6 +238,7 @@ pub struct CacheKey {
     dfg: CachedDataFlowGraph,
     layout: Layout,
     stack_limit: Option<ir::GlobalValue>,
+    srclocs: SecondaryMap<Inst, RelSourceLoc>,
 
     // Extra fields
     parameters: CompileParameters,
@@ -333,7 +286,7 @@ impl CacheKey {
                 jump_tables: self.jump_tables,
                 dfg: self.dfg.check_from_src(),
                 layout: self.layout,
-                srclocs: Default::default(), // caching is resilient to source locs
+                srclocs: self.srclocs,
                 stack_limit: self.stack_limit,
             },
             params: FunctionParameters::new(Default::default()), // all the things we're resilient to
@@ -343,31 +296,7 @@ impl CacheKey {
     /// Creates a new cache store key for a function.
     ///
     /// This is a bit expensive to compute, so it should be cached and reused as much as possible.
-    fn new(isa: &dyn TargetIsa, f: &Function, offset: SourceLoc) -> Self {
-        let values_labels = f.dfg.values_labels.clone().map(|vl| {
-            vl.into_iter()
-                .map(|(k, v)| {
-                    let v = match v {
-                        ValueLabelAssignments::Starts(vec) => CachedValueLabelAssignments::Starts(
-                            vec.into_iter()
-                                .map(|vls| CachedValueLabelStart {
-                                    from: RelSourceLoc::new(vls.from, offset),
-                                    label: vls.label,
-                                })
-                                .collect(),
-                        ),
-                        ValueLabelAssignments::Alias { from, value } => {
-                            CachedValueLabelAssignments::Alias {
-                                from: RelSourceLoc::new(from, offset),
-                                value,
-                            }
-                        }
-                    };
-                    (k, v)
-                })
-                .collect()
-        });
-
+    fn new(isa: &dyn TargetIsa, f: &Function) -> Self {
         let ext_funcs = f
             .dfg
             .ext_funcs
@@ -410,7 +339,7 @@ impl CacheKey {
             immediates: f.dfg.immediates.clone(),
 
             constants: f.dfg.constants.clone(),
-            values_labels,
+            values_labels: f.dfg.values_labels.clone(),
             ext_funcs,
         };
 
@@ -432,111 +361,14 @@ impl CacheKey {
             dfg,
             layout,
             stack_limit: f.stack_limit.clone(),
+            srclocs: f.rel_srclocs().clone(),
             parameters: CompileParameters::from_isa(isa),
-        }
-    }
-}
-
-/// Relative source location.
-///
-/// This can be used to recompute source locations independently of the other functions in the
-/// project.
-#[derive(Debug, Clone, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
-struct RelSourceLoc(u32);
-
-impl RelSourceLoc {
-    fn new(loc: SourceLoc, offset: SourceLoc) -> Self {
-        if loc.is_default() || offset.is_default() {
-            Self(SourceLoc::default().bits())
-        } else {
-            Self(loc.bits() - offset.bits())
-        }
-    }
-
-    fn expand(&self, offset: SourceLoc) -> SourceLoc {
-        if SourceLoc::new(self.0).is_default() || offset.is_default() {
-            SourceLoc::default()
-        } else {
-            SourceLoc::new(self.0 + offset.bits())
-        }
-    }
-}
-
-// --
-// Copies of data structures that use `RelSourceLoc` instead of `SourceLoc`.
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct CachedMachSrcLoc {
-    start: CodeOffset,
-    end: CodeOffset,
-    loc: RelSourceLoc,
-}
-
-impl CachedMachSrcLoc {
-    fn new(loc: &MachSrcLoc, offset: SourceLoc) -> Self {
-        Self {
-            start: loc.start,
-            end: loc.end,
-            loc: RelSourceLoc::new(loc.loc, offset),
-        }
-    }
-
-    fn expand(self, offset: SourceLoc) -> MachSrcLoc {
-        MachSrcLoc {
-            start: self.start,
-            end: self.end,
-            loc: self.loc.expand(offset),
         }
     }
 }
 
 // --
 // Our final data structure.
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct CachedMachBufferFinalized {
-    data: SmallVec<[u8; 1024]>,
-    relocs: SmallVec<[MachReloc; 16]>,
-    traps: SmallVec<[MachTrap; 16]>,
-    call_sites: SmallVec<[MachCallSite; 16]>,
-    srclocs: SmallVec<[CachedMachSrcLoc; 64]>,
-    stack_maps: SmallVec<[MachStackMap; 8]>,
-    unwind_info: SmallVec<[(CodeOffset, UnwindInst); 8]>,
-}
-
-impl CachedMachBufferFinalized {
-    fn new(mbf: &MachBufferFinalized, offset: SourceLoc) -> Self {
-        Self {
-            data: mbf.data.clone(),
-            relocs: mbf.relocs().into_iter().cloned().collect(),
-            traps: mbf.traps().into_iter().cloned().collect(),
-            call_sites: mbf.call_sites().into_iter().cloned().collect(),
-            srclocs: mbf
-                .get_srclocs_sorted()
-                .iter()
-                .map(|loc| CachedMachSrcLoc::new(loc, offset))
-                .collect(),
-            stack_maps: mbf.stack_maps.clone(),
-            unwind_info: mbf.unwind_info.clone(),
-        }
-    }
-
-    fn expand(self, offset: SourceLoc) -> MachBufferFinalized {
-        MachBufferFinalized {
-            data: self.data,
-            relocs: self.relocs,
-            traps: self.traps,
-            call_sites: self.call_sites,
-            srclocs: self
-                .srclocs
-                .into_iter()
-                .map(|loc| loc.expand(offset))
-                .collect(),
-            stack_maps: self.stack_maps,
-            unwind_info: self.unwind_info,
-        }
-    }
-}
 
 #[derive(Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct UserExternalName {
@@ -548,7 +380,7 @@ struct UserExternalName {
 struct CachedMachCompileResult {
     // These are fields from the `MachCompileResult`.
     // ---
-    buffer: CachedMachBufferFinalized,
+    buffer: MachBufferFinalized<Stencil>,
     frame_size: u32,
     disasm: Option<String>,
     value_labels_ranges: ValueLabelsRanges,
@@ -564,13 +396,7 @@ struct CachedMachCompileResult {
 }
 
 impl CachedMachCompileResult {
-    fn new(func: &Function, mcr: &MachCompileResult) -> Self {
-        let offset = func
-            .srclocs
-            .get(Inst::new(0))
-            .cloned()
-            .unwrap_or(SourceLoc::new(0));
-
+    fn new(func: &Function, mcr: &MachCompileResultBase<Stencil>) -> Self {
         let func_refs = func
             .dfg
             .ext_funcs
@@ -591,7 +417,7 @@ impl CachedMachCompileResult {
             .collect();
 
         Self {
-            buffer: CachedMachBufferFinalized::new(&mcr.buffer, offset),
+            buffer: mcr.buffer.clone(),
             frame_size: mcr.frame_size,
             disasm: mcr.disasm.clone(),
             value_labels_ranges: mcr.value_labels_ranges.clone(),
@@ -603,11 +429,9 @@ impl CachedMachCompileResult {
         }
     }
 
-    fn expand(self, after: &Function, offset: SourceLoc) -> MachCompileResult {
-        let mut buffer = self.buffer.expand(offset);
-
+    fn expand(mut self, after: &Function) -> MachCompileResultBase<Stencil> {
         // Adjust external names in relocations.
-        for reloc in buffer.relocs.iter_mut() {
+        for reloc in self.buffer.relocs.iter_mut() {
             if let ExternalName::User {
                 ref mut namespace,
                 ref mut index,
@@ -633,8 +457,8 @@ impl CachedMachCompileResult {
             }
         }
 
-        MachCompileResult {
-            buffer,
+        MachCompileResultBase {
+            buffer: self.buffer,
             frame_size: self.frame_size,
             disasm: self.disasm,
             value_labels_ranges: self.value_labels_ranges,
@@ -651,13 +475,7 @@ impl CachedMachCompileResult {
 /// Since computing the `CacheKey` is a bit expensive, it should be done as least as possible.
 #[inline(never)]
 pub fn compute_cache_key(isa: &dyn TargetIsa, func: &Function) -> (CacheKey, CacheKeyHash) {
-    let srcloc_offset = func
-        .srclocs
-        .get(Inst::new(0))
-        .cloned()
-        .unwrap_or(SourceLoc::new(0));
-
-    let cache_key = CacheKey::new(isa, func, srcloc_offset);
+    let cache_key = CacheKey::new(isa, func);
 
     let hash = {
         use core::hash::{Hash as _, Hasher as _};
@@ -675,7 +493,7 @@ pub fn compute_cache_key(isa: &dyn TargetIsa, func: &Function) -> (CacheKey, Cac
 pub fn serialize_compiled(
     cache_key: CacheKey,
     func: &Function,
-    result: &MachCompileResult,
+    result: &MachCompileResultBase<Stencil>,
 ) -> Result<Vec<u8>, bincode::Error> {
     let cached = CachedFunc {
         cache_key,
@@ -691,13 +509,7 @@ pub fn try_finish_recompile(
     cache_key: &CacheKey,
     func: &Function,
     bytes: &[u8],
-) -> Result<MachCompileResult, ()> {
-    let srcloc_offset = func
-        .srclocs
-        .get(Inst::new(0))
-        .cloned()
-        .unwrap_or(SourceLoc::new(0));
-
+) -> Result<MachCompileResultBase<Stencil>, ()> {
     // try to deserialize, if not failure, return final recompiled code
     match bincode::deserialize::<CachedFunc>(bytes) {
         Ok(mut result) => {
@@ -707,7 +519,7 @@ pub fn try_finish_recompile(
             result.cache_key.layout.full_renumber();
 
             if *cache_key == result.cache_key {
-                let mach_compile_result = result.compile_result.expand(func, srcloc_offset);
+                let mach_compile_result = result.compile_result.expand(func);
                 return Ok(mach_compile_result);
             } else {
                 eprintln!("{} not read from cache: source mismatch", func.params.name);
