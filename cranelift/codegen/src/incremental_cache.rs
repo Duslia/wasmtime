@@ -27,7 +27,7 @@ use crate::ir::dfg::{BlockData, ValueDataPacked};
 use crate::ir::function::{FunctionParameters, FunctionStencil, VersionMarker};
 use crate::ir::instructions::InstructionData;
 use crate::ir::{
-    self, Block, Constant, ConstantData, ConstantPool, DataFlowGraph, DynamicStackSlot,
+    self, Block, ConstantData, ConstantPool, DataFlowGraph, DynamicStackSlot,
     DynamicStackSlots, DynamicTypes, ExtFuncData, ExternalName, FuncRef, Function, Immediate, Inst,
     JumpTables, Layout, LibCall, SigRef, Signature, SourceLoc, StackSlot, StackSlots, Value,
     ValueLabel, ValueLabelAssignments, ValueLabelStart, ValueList, TESTCASE_NAME_LENGTH,
@@ -164,23 +164,6 @@ impl CachedValueLabelAssignments {
     }
 }
 
-#[derive(Clone, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
-struct CachedConstantPool {
-    handles_to_values: BTreeMap<Constant, ConstantData>,
-    values_to_handles: BTreeMap<ConstantData, Constant>,
-}
-
-impl CachedConstantPool {
-    #[allow(dead_code)]
-    /// Not intended for use; see comment on top of `CacheKey`.
-    fn check_from_src(self) -> ConstantPool {
-        ConstantPool {
-            handles_to_values: self.handles_to_values.into_iter().collect(),
-            values_to_handles: self.values_to_handles.into_iter().collect(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 enum CachedExternalName {
     User,
@@ -241,11 +224,11 @@ struct CachedDataFlowGraph {
     signatures: PrimaryMap<SigRef, Signature>,
     old_signatures: SecondaryMap<SigRef, Option<Signature>>,
     immediates: PrimaryMap<Immediate, ConstantData>,
+    constants: ConstantPool,
 
     // --
     // Fields that we tweaked for caching
     // --
-    constants: CachedConstantPool,
     values_labels: Option<BTreeMap<Value, CachedValueLabelAssignments>>,
     /// Same as `DataFlowGraph::ext_funcs`, but we remove the identifying fields of the
     /// `ExternalName` so two calls to external user functions appear the same and end up in the
@@ -277,7 +260,7 @@ impl CachedDataFlowGraph {
                     .map(|(k, v)| (k, v.check_from_src()))
                     .collect()
             }),
-            constants: self.constants.check_from_src(),
+            constants: self.constants,
             immediates: self.immediates,
         }
     }
@@ -361,17 +344,6 @@ impl CacheKey {
     ///
     /// This is a bit expensive to compute, so it should be cached and reused as much as possible.
     fn new(isa: &dyn TargetIsa, f: &Function, offset: SourceLoc) -> Self {
-        let constants = CachedConstantPool {
-            handles_to_values: f.dfg.constants.handles_to_values.clone(),
-            values_to_handles: f
-                .dfg
-                .constants
-                .values_to_handles
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone()))
-                .collect(),
-        };
-
         let values_labels = f.dfg.values_labels.clone().map(|vl| {
             vl.into_iter()
                 .map(|(k, v)| {
@@ -437,7 +409,7 @@ impl CacheKey {
             old_signatures: f.dfg.old_signatures.clone(),
             immediates: f.dfg.immediates.clone(),
 
-            constants,
+            constants: f.dfg.constants.clone(),
             values_labels,
             ext_funcs,
         };
