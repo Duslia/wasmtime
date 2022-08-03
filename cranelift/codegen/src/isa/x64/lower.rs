@@ -603,7 +603,7 @@ fn emit_vm_call<C: LowerCtx<I = Inst>>(
     inputs: SmallVec<[InsnInput; 4]>,
     outputs: SmallVec<[InsnOutput; 2]>,
 ) -> CodegenResult<()> {
-    let extname = ExternalName::LibCall(libcall);
+    let extname = ExternalNameStencil::LibCall(libcall);
 
     let dist = if flags.use_colocated_libcalls() {
         RelocDistance::Near

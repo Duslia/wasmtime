@@ -1,7 +1,7 @@
 //! Implementation of the standard x64 ABI.
 
-use crate::ir::types::*;
-use crate::ir::{self, types, ExternalName, LibCall, MemFlags, Opcode, Signature, TrapCode, Type};
+use crate::ir::{self, types, LibCall, MemFlags, Opcode, Signature, TrapCode, Type};
+use crate::ir::{types::*, ExternalNameStencil};
 use crate::isa;
 use crate::isa::{unwind::UnwindInst, x64::inst::*, CallConv};
 use crate::machinst::abi_impl::*;
@@ -487,7 +487,7 @@ impl ABIMachineSpec for X64ABIMachineSpec {
             Writable::from_reg(regs::rax()),
         ));
         insts.push(Inst::CallKnown {
-            dest: ExternalName::LibCall(LibCall::Probestack),
+            dest: ExternalNameStencil::LibCall(LibCall::Probestack),
             info: Box::new(CallInfo {
                 uses: smallvec![regs::rax()],
                 defs: smallvec![],
@@ -654,7 +654,7 @@ impl ABIMachineSpec for X64ABIMachineSpec {
             &CallDest::ExtName(ref name, RelocDistance::Far) => {
                 insts.push(Inst::LoadExtName {
                     dst: tmp,
-                    name: Box::new(name.clone()),
+                    name: name.clone(),
                     offset: 0,
                 });
                 insts.push(Inst::call_unknown(
@@ -711,7 +711,7 @@ impl ABIMachineSpec for X64ABIMachineSpec {
         // conservatively use the more flexible calling sequence.
         insts.push(Inst::LoadExtName {
             dst: Writable::from_reg(memcpy_addr),
-            name: Box::new(ExternalName::LibCall(LibCall::Memcpy)),
+            name: ExternalNameStencil::LibCall(LibCall::Memcpy),
             offset: 0,
         });
         insts.push(Inst::call_unknown(

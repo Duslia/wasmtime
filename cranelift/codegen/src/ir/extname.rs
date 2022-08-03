@@ -12,7 +12,47 @@ use core::str::FromStr;
 #[cfg(feature = "enable-serde")]
 use serde::{Deserialize, Serialize};
 
+use super::FuncRef;
+
 pub(crate) const TESTCASE_NAME_LENGTH: usize = 16;
+
+/// A name in a user-defined symbol table. Cranelift does not interpret
+/// these numbers in any way.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
+pub struct UserExternalName {
+    /// Arbitrary.
+    pub(crate) namespace: u32,
+    /// Arbitrary.
+    pub(crate) index: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Hash)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
+pub enum ExternalNameStencil {
+    User(FuncRef),
+    TestCase {
+        length: u8,
+        ascii: [u8; TESTCASE_NAME_LENGTH],
+    },
+    LibCall(LibCall),
+}
+
+impl fmt::Display for ExternalNameStencil {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Self::User(func_ref) => write!(f, "u%{}", func_ref),
+            Self::TestCase { length, ascii } => {
+                f.write_char('%')?;
+                for byte in ascii.iter().take(length as usize) {
+                    f.write_char(*byte as char)?;
+                }
+                Ok(())
+            }
+            Self::LibCall(lc) => write!(f, "%{}", lc),
+        }
+    }
+}
 
 /// The name of an external is either a reference to a user-defined symbol
 /// table, or a short sequence of ascii bytes so that test cases do not have

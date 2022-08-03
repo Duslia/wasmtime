@@ -1,4 +1,4 @@
-use crate::ir::{types, Inst, Value, ValueList};
+use crate::ir::{types, ExternalNameStencil, Inst, Value, ValueList};
 use crate::machinst::{get_output_reg, InsnOutput, LowerCtx};
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -26,6 +26,7 @@ pub type WritableValueRegs = crate::machinst::ValueRegs<WritableReg>;
 pub type InstOutput = SmallVec<[ValueRegs; 2]>;
 pub type InstOutputBuilder = Cell<InstOutput>;
 pub type BoxExternalName = Box<ExternalName>;
+pub type BoxExternalNameStencil = Box<ExternalNameStencil>;
 pub type Range = (usize, usize);
 
 /// Helper macro to define methods in `prelude.isle` within `impl Context for
@@ -616,7 +617,10 @@ macro_rules! isle_prelude_methods {
         }
 
         #[inline]
-        fn func_ref_data(&mut self, func_ref: FuncRef) -> (SigRef, ExternalName, RelocDistance) {
+        fn func_ref_data(
+            &mut self,
+            func_ref: FuncRef,
+        ) -> (SigRef, crate::ir::ExternalNameStencil, RelocDistance) {
             let funcdata = &self.lower_ctx.dfg().ext_funcs[func_ref];
             (
                 funcdata.signature,
@@ -626,7 +630,10 @@ macro_rules! isle_prelude_methods {
         }
 
         #[inline]
-        fn box_external_name(&mut self, extname: ExternalName) -> BoxExternalName {
+        fn box_external_name(
+            &mut self,
+            extname: crate::ir::ExternalNameStencil,
+        ) -> BoxExternalNameStencil {
             Box::new(extname)
         }
 
@@ -634,7 +641,7 @@ macro_rules! isle_prelude_methods {
         fn symbol_value_data(
             &mut self,
             global_value: GlobalValue,
-        ) -> Option<(ExternalName, RelocDistance, i64)> {
+        ) -> Option<(crate::ir::ExternalNameStencil, RelocDistance, i64)> {
             let (name, reloc, offset) = self.lower_ctx.symbol_value_data(global_value)?;
             Some((name.clone(), reloc, offset))
         }

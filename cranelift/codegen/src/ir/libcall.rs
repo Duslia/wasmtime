@@ -1,10 +1,12 @@
 //! Naming well-known routines in the runtime library.
 
-use crate::ir::{types, ExternalName, FuncRef, Function, Opcode, Type};
+use crate::ir::{types, FuncRef, Function, Opcode, Type};
 use core::fmt;
 use core::str::FromStr;
 #[cfg(feature = "enable-serde")]
 use serde::{Deserialize, Serialize};
+
+use super::extname::ExternalNameStencil;
 
 /// The name of a runtime library routine.
 ///
@@ -179,7 +181,7 @@ fn find_funcref(libcall: LibCall, func: &Function) -> Option<FuncRef> {
     // If we get this wrong, worst case we'll have duplicate libcall decls which is harmless.
     for (fref, func_data) in func.dfg.ext_funcs.iter().rev() {
         match func_data.name {
-            ExternalName::LibCall(lc) => {
+            ExternalNameStencil::LibCall(lc) => {
                 if lc == libcall {
                     return Some(fref);
                 }

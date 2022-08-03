@@ -4,7 +4,6 @@ use crate::entity::{self, PrimaryMap, SecondaryMap};
 use crate::ir;
 use crate::ir::builder::ReplaceBuilder;
 use crate::ir::dynamic_type::{DynamicTypeData, DynamicTypes};
-use crate::ir::extfunc::ExtFuncData;
 use crate::ir::instructions::{BranchInfo, CallInfo, InstructionData};
 use crate::ir::{types, ConstantData, ConstantPool, Immediate};
 use crate::ir::{
@@ -24,6 +23,7 @@ use alloc::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use super::RelSourceLoc;
+use super::extfunc::ExtFuncDataStencil;
 
 /// A data flow graph defines all instructions and basic blocks in a function as well as
 /// the data flow dependencies between them. The DFG also tracks values which can be either
@@ -32,7 +32,7 @@ use super::RelSourceLoc;
 /// The layout of blocks in the function and of instructions in each block is recorded by the
 /// `Layout` data structure which forms the other half of the function representation.
 ///
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Hash)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct DataFlowGraph {
     /// Data about all of the instructions in the function, including opcodes and operands.
@@ -75,7 +75,7 @@ pub struct DataFlowGraph {
     pub old_signatures: SecondaryMap<SigRef, Option<Signature>>,
 
     /// External function references. These are functions that can be called directly.
-    pub ext_funcs: PrimaryMap<FuncRef, ExtFuncData>,
+    pub ext_funcs: PrimaryMap<FuncRef, ExtFuncDataStencil>,
 
     /// Saves Value labels.
     pub values_labels: Option<BTreeMap<Value, ValueLabelAssignments>>,

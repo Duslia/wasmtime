@@ -1584,7 +1584,7 @@ pub struct ABICallerImpl<M: ABIMachineSpec> {
 #[derive(Debug, Clone)]
 pub enum CallDest {
     /// Call to an ExtName (named function symbol).
-    ExtName(ir::ExternalName, RelocDistance),
+    ExtName(ir::ExternalNameStencil, RelocDistance),
     /// Indirect call to a function pointer in a register.
     Reg(Reg),
 }
@@ -1593,7 +1593,7 @@ impl<M: ABIMachineSpec> ABICallerImpl<M> {
     /// Create a callsite ABI object for a call directly to the specified function.
     pub fn from_func(
         sig: &ir::Signature,
-        extname: &ir::ExternalName,
+        extname: &ir::ExternalNameStencil,
         dist: RelocDistance,
         caller_conv: isa::CallConv,
         flags: &settings::Flags,

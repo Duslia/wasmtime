@@ -9,13 +9,13 @@ use crate::data_value::DataValue;
 use crate::entity::SecondaryMap;
 use crate::fx::{FxHashMap, FxHashSet};
 use crate::inst_predicates::{has_lowering_side_effect, is_constant_64bit};
-use crate::ir::RelSourceLoc;
 use crate::ir::{
     types::{FFLAGS, IFLAGS},
-    ArgumentPurpose, Block, Constant, ConstantData, DataFlowGraph, ExternalName, Function,
+    ArgumentPurpose, Block, Constant, ConstantData, DataFlowGraph, Function,
     GlobalValue, GlobalValueData, Immediate, Inst, InstructionData, MemFlags, Opcode, Signature,
     Type, Value, ValueDef, ValueLabelAssignments, ValueLabelStart,
 };
+use crate::ir::{ExternalNameStencil, RelSourceLoc};
 use crate::machinst::{
     non_writable_value_regs, writable_value_regs, ABICallee, BlockIndex, BlockLoweringOrder,
     LoweredBlock, MachLabel, Reg, VCode, VCodeBuilder, VCodeConstant, VCodeConstantData,
@@ -89,17 +89,21 @@ pub trait LowerCtx {
     /// providing this name and the "relocation distance", i.e., whether the backend
     /// can assume the target will be "nearby" (within some small offset) or an
     /// arbitrary address. (This comes from the `colocated` bit in the CLIF.)
-    fn call_target<'b>(&'b self, ir_inst: Inst) -> Option<(&'b ExternalName, RelocDistance)>;
+    fn call_target<'b>(&'b self, ir_inst: Inst)
+        -> Option<(&'b ExternalNameStencil, RelocDistance)>;
     /// Get the signature for a call or call-indirect instruction.
     fn call_sig<'b>(&'b self, ir_inst: Inst) -> Option<&'b Signature>;
     /// Get the symbol name, relocation distance estimate, and offset for a
     /// symbol_value instruction.
-    fn symbol_value<'b>(&'b self, ir_inst: Inst) -> Option<(&'b ExternalName, RelocDistance, i64)>;
+    fn symbol_value<'b>(
+        &'b self,
+        ir_inst: Inst,
+    ) -> Option<(&'b ExternalNameStencil, RelocDistance, i64)>;
     /// Likewise, but starting with a GlobalValue identifier.
     fn symbol_value_data<'b>(
         &'b self,
         global_value: GlobalValue,
-    ) -> Option<(&'b ExternalName, RelocDistance, i64)>;
+    ) -> Option<(&'b ExternalNameStencil, RelocDistance, i64)>;
     /// Returns the memory flags of a given memory access.
     fn memflags(&self, ir_inst: Inst) -> Option<MemFlags>;
     /// Get the source location for a given instruction.
@@ -1186,7 +1190,7 @@ impl<'func, I: VCodeInst> LowerCtx for Lower<'func, I> {
         self.f.dfg.ctrl_typevar(ir_inst)
     }
 
-    fn call_target<'b>(&'b self, ir_inst: Inst) -> Option<(&'b ExternalName, RelocDistance)> {
+    fn call_target(&self, ir_inst: Inst) -> Option<(&ExternalNameStencil, RelocDistance)> {
         match &self.f.dfg[ir_inst] {
             &InstructionData::Call { func_ref, .. }
             | &InstructionData::FuncAddr { func_ref, .. } => {
@@ -1209,7 +1213,7 @@ impl<'func, I: VCodeInst> LowerCtx for Lower<'func, I> {
         }
     }
 
-    fn symbol_value<'b>(&'b self, ir_inst: Inst) -> Option<(&'b ExternalName, RelocDistance, i64)> {
+    fn symbol_value<'b>(&'b self, ir_inst: Inst) -> Option<(&'b ExternalNameStencil, RelocDistance, i64)> {
         match &self.f.dfg[ir_inst] {
             &InstructionData::UnaryGlobalValue { global_value, .. } => {
                 self.symbol_value_data(global_value)
@@ -1221,7 +1225,7 @@ impl<'func, I: VCodeInst> LowerCtx for Lower<'func, I> {
     fn symbol_value_data<'b>(
         &'b self,
         global_value: GlobalValue,
-    ) -> Option<(&'b ExternalName, RelocDistance, i64)> {
+    ) -> Option<(&'b ExternalNameStencil, RelocDistance, i64)> {
         let gvdata = &self.f.global_values[global_value];
         match gvdata {
             &GlobalValueData::Symbol {

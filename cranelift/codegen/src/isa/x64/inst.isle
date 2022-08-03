@@ -321,7 +321,7 @@
        ;; Control flow instructions.
 
        ;; Direct call: call simm32.
-       (CallKnown (dest ExternalName)
+       (CallKnown (dest ExternalNameStencil)
                   (info BoxCallInfo))
 
        ;; Indirect call: callq (reg mem)
@@ -392,7 +392,7 @@
        ;; movq $name@GOTPCREL(%rip), dst    if PIC is enabled, or
        ;; movabsq $name, dst                otherwise.
        (LoadExtName (dst WritableReg)
-                    (name BoxExternalName)
+                    (name ExternalNameStencil)
                     (offset i64))
 
        ;; =========================================
@@ -477,11 +477,11 @@
 
        ;; A call to the `ElfTlsGetAddr` libcall. Returns address of TLS symbol
        ;; in `rax`.
-       (ElfTlsGetAddr (symbol ExternalName))
+       (ElfTlsGetAddr (symbol ExternalNameStencil))
 
        ;; A Mach-O TLS symbol access. Returns address of the TLS symbol in
        ;; `rax`.
-       (MachOTlsGetAddr (symbol ExternalName))
+       (MachOTlsGetAddr (symbol ExternalNameStencil))
 
        ;; An unwind pseudoinstruction describing the state of the machine at
        ;; this program point.
@@ -1508,7 +1508,7 @@
 
 ;;;; Helpers for Emitting Calls ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-(decl gen_call (SigRef ExternalName RelocDistance ValueSlice) InstOutput)
+(decl gen_call (SigRef ExternalNameStencil RelocDistance ValueSlice) InstOutput)
 (extern constructor gen_call gen_call)
 
 (decl gen_call_indirect (SigRef Value ValueSlice) InstOutput)
@@ -1542,7 +1542,7 @@
         (copy_to_regs_range ty tail dsts srcs)))
 
 ;; Helper for constructing a LoadExtName instruction.
-(decl load_ext_name (ExternalName i64) Reg)
+(decl load_ext_name (ExternalNameStencil i64) Reg)
 (rule (load_ext_name extname offset)
       (let ((dst WritableGpr (temp_writable_gpr))
             (_ Unit (emit (MInst.LoadExtName dst extname offset))))

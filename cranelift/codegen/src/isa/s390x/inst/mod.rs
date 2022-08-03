@@ -1,7 +1,7 @@
 //! This module defines s390x-specific machine instruction types.
 
 use crate::binemit::{Addend, CodeOffset, Reloc};
-use crate::ir::{types, ExternalName, Opcode, Type};
+use crate::ir::{types, ExternalName, Opcode, Type, ExternalNameStencil};
 use crate::isa::CallConv;
 use crate::machinst::*;
 use crate::{settings, CodegenError, CodegenResult};
@@ -36,7 +36,7 @@ pub use crate::isa::s390x::lower::isle::generated_code::{
 /// the Inst enum.
 #[derive(Clone, Debug)]
 pub struct CallInfo {
-    pub dest: ExternalName,
+    pub dest: ExternalNameStencil,
     pub uses: SmallVec<[Reg; 8]>,
     pub defs: SmallVec<[Writable<Reg>; 8]>,
     pub clobbers: PRegSet,

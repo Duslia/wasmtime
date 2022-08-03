@@ -43,9 +43,10 @@ pub use crate::ir::entities::{
     JumpTable, SigRef, StackSlot, Table, Value,
 };
 pub use crate::ir::extfunc::{
-    AbiParam, ArgumentExtension, ArgumentPurpose, ExtFuncData, Signature,
+    AbiParam, ArgumentExtension, ArgumentPurpose, ExtFuncData, ExtFuncDataStencil, Signature,
 };
 pub use crate::ir::extname::ExternalName;
+pub use crate::ir::extname::ExternalNameStencil;
 pub use crate::ir::function::{DisplayFunctionAnnotations, Function};
 pub use crate::ir::globalvalue::GlobalValueData;
 pub use crate::ir::heap::{HeapData, HeapStyle};
