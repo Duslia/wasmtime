@@ -32,7 +32,7 @@ use crate::ir::{
     Layout, LibCall, RelSourceLoc, SigRef, Signature, StackSlot, StackSlots, Value,
     ValueLabelAssignments, ValueList, TESTCASE_NAME_LENGTH,
 };
-use crate::machinst::{MachBufferFinalized, MachCompileResultBase, Stencil};
+use crate::machinst::{MachBufferFinalized, MachCompileResult, MachCompileResultBase, Stencil};
 use crate::ValueLabelsRanges;
 use crate::{binemit::CodeInfo, isa::TargetIsa, timing, CodegenResult};
 use crate::{Context, HashMap};
@@ -56,9 +56,8 @@ impl Context {
             let (cache_key, cache_key_hash) = compute_cache_key(isa, &self.func);
 
             if let Some(blob) = cache_store.get(&cache_key_hash.0) {
-                if let Ok(stencil) = try_finish_recompile(&cache_key, &self.func, &blob) {
-                    let info = stencil.code_info();
-                    let compile_result = stencil.apply_params(&self.func.params);
+                if let Ok(compiled_code) = try_finish_recompile(&cache_key, &self.func, &blob) {
+                    let info = compiled_code.code_info();
 
                     if isa.flags().enable_incremental_compilation_cache_checks() {
                         let actual_info = self.compile(isa)?;
@@ -66,11 +65,11 @@ impl Context {
                             .mach_compile_result
                             .as_ref()
                             .expect("if compilation succeeds, then mach_compile_result is set");
-                        assert_eq!(*actual_result, compile_result);
+                        assert_eq!(*actual_result, compiled_code);
                         assert_eq!(actual_info, info);
                     }
 
-                    self.mach_compile_result = Some(compile_result);
+                    self.mach_compile_result = Some(compiled_code);
                     return Ok((info, true));
                 }
             }
@@ -509,7 +508,7 @@ pub fn try_finish_recompile(
     cache_key: &CacheKey,
     func: &Function,
     bytes: &[u8],
-) -> Result<MachCompileResultBase<Stencil>, ()> {
+) -> Result<MachCompileResult, ()> {
     // try to deserialize, if not failure, return final recompiled code
     match bincode::deserialize::<CachedFunc>(bytes) {
         Ok(mut result) => {
@@ -519,8 +518,8 @@ pub fn try_finish_recompile(
             result.cache_key.layout.full_renumber();
 
             if *cache_key == result.cache_key {
-                let mach_compile_result = result.compile_result.expand(func);
-                return Ok(mach_compile_result);
+                let stencil = result.compile_result.expand(func);
+                return Ok(stencil.apply_params(&func.params));
             } else {
                 eprintln!("{} not read from cache: source mismatch", func.params.name);
 

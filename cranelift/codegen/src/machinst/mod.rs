@@ -302,7 +302,8 @@ pub struct MachCompileResultBase<T: CompilePhase> {
 }
 
 impl MachCompileResultBase<Stencil> {
-    pub(crate) fn apply_params(self, params: &FunctionParameters) -> MachCompileResult {
+    /// Apply function parameters to finalize a stencil into its final form.
+    pub fn apply_params(self, params: &FunctionParameters) -> MachCompileResult {
         MachCompileResult {
             buffer: self.buffer.apply_params(params),
             frame_size: self.frame_size,

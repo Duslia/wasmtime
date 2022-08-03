@@ -135,7 +135,10 @@ impl Context {
         Ok(info)
     }
 
-    pub(crate) fn compile_stencil(
+    /// Internally compiles the function into a stencil.
+    ///
+    /// Public only for testing and fuzzing purposes.
+    pub fn compile_stencil(
         &mut self,
         isa: &dyn TargetIsa,
     ) -> CodegenResult<MachCompileResultBase<Stencil>> {

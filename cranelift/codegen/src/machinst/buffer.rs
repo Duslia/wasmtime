@@ -185,6 +185,7 @@ impl CompilePhase for Stencil {
     type MachSrcLocType = MachSrcLoc<Stencil>;
     type SourceLocType = RelSourceLoc;
 }
+
 impl CompilePhase for Final {
     type MachSrcLocType = MachSrcLoc<Final>;
     type SourceLocType = SourceLoc;

@@ -30,14 +30,16 @@ fuzz_target!(|func: SingleFunction| {
     let (cache_key, _cache_key_hash) = icache::compute_cache_key(&*isa, &func);
 
     let mut context = Context::for_function(func.clone());
-    let prev_info = match context.compile(&*isa) {
-        Ok(info) => info,
+    let prev_stencil = match context.compile_stencil(&*isa) {
+        Ok(stencil) => stencil,
         Err(_) => return,
     };
-    let prev_result = context.mach_compile_result.unwrap();
 
-    let serialized = icache::serialize_compiled(cache_key.clone(), &func, &prev_result)
+    let serialized = icache::serialize_compiled(cache_key.clone(), &func, &prev_stencil)
         .expect("serialization failure");
+
+    let prev_result = prev_stencil.apply_params(&func.params);
+    let prev_info = prev_result.code_info();
 
     let new_result = icache::try_finish_recompile(&cache_key, &func, &serialized)
         .expect("recompilation should always work for identity");

@@ -3154,7 +3154,7 @@ mod tests {
         )
         .parse_function()
         .unwrap();
-        assert_eq!(func.name.to_string(), "%qux");
+        assert_eq!(func.params.name.to_string(), "%qux");
         let v4 = details.map.lookup_str("v4").unwrap();
         assert_eq!(v4.to_string(), "v4");
         let v3 = details.map.lookup_str("v3").unwrap();
@@ -3231,7 +3231,7 @@ mod tests {
         )
         .parse_function()
         .unwrap();
-        assert_eq!(func.name.to_string(), "%foo");
+        assert_eq!(func.params.name.to_string(), "%foo");
         let mut iter = func.sized_stack_slots.keys();
         let _ss0 = iter.next().unwrap();
         let ss1 = iter.next().unwrap();
@@ -3276,7 +3276,7 @@ mod tests {
         )
         .parse_function()
         .unwrap();
-        assert_eq!(func.name.to_string(), "%blocks");
+        assert_eq!(func.params.name.to_string(), "%blocks");
 
         let mut blocks = func.layout.blocks();
 
@@ -3458,7 +3458,7 @@ mod tests {
         )
         .parse_function()
         .unwrap();
-        assert_eq!(func.name.to_string(), "%comment");
+        assert_eq!(func.params.name.to_string(), "%comment");
         assert_eq!(comments.len(), 8); // no 'before' comment.
         assert_eq!(
             comments[0],
@@ -3512,7 +3512,7 @@ mod tests {
         assert_eq!(tf.preamble_comments[0].text, "; before");
         assert_eq!(tf.preamble_comments[1].text, "; still preamble");
         assert_eq!(tf.functions.len(), 1);
-        assert_eq!(tf.functions[0].0.name.to_string(), "%comment");
+        assert_eq!(tf.functions[0].0.params.name.to_string(), "%comment");
     }
 
     #[test]
@@ -3561,7 +3561,7 @@ mod tests {
         .parse_function()
         .unwrap()
         .0;
-        assert_eq!(func.name.to_string(), "u1:2");
+        assert_eq!(func.params.name.to_string(), "u1:2");
 
         // Invalid characters in the name:
         let mut parser = Parser::new(

@@ -251,7 +251,7 @@ fn compile(function: Function, isa: &dyn TargetIsa) -> Result<Mmap, CompilationE
     let code_page = code_page.make_exec()?;
     trace!(
         "Compiled function {} with signature {} at: {:p}",
-        context.func.name,
+        context.func.params.name,
         context.func.signature,
         code_page.as_ptr()
     );
