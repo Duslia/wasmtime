@@ -899,7 +899,7 @@ mod tests {
     use super::Layout;
     use crate::cursor::{Cursor, CursorPosition};
     use crate::entity::EntityRef;
-    use crate::ir::{Block, Inst, ProgramOrder, RelSourceLoc, SourceLoc};
+    use crate::ir::{Block, Inst, ProgramOrder, SourceLoc};
     use alloc::vec::Vec;
     use core::cmp::Ordering;
 
@@ -918,7 +918,7 @@ mod tests {
             self.pos = pos;
         }
 
-        fn srcloc(&self) -> RelSourceLoc {
+        fn srcloc(&self) -> SourceLoc {
             unimplemented!()
         }
 

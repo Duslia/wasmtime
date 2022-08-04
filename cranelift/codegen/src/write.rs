@@ -578,7 +578,7 @@ mod tests {
     #[test]
     fn basic() {
         let mut f = Function::new();
-        assert_eq!(f.to_string(), "function u0:0() fast {\n}\n");
+        assert_eq!(f.to_string(), "function u0() fast {\n}\n");
 
         f.params.name = ExternalName::testcase("foo");
         assert_eq!(f.to_string(), "function %foo() fast {\n}\n");
@@ -651,7 +651,7 @@ mod tests {
         }
         assert_eq!(
             func.to_string(),
-            "function u0:0() fast {\nblock0(v3: i32):\n    v0 -> v3\n    v2 -> v0\n    v4 = iconst.i32 42\n    v5 = iadd v0, v0\n    v1 -> v5\n    v6 = iconst.i32 23\n    v7 = iadd v1, v1\n}\n"
+            "function u0() fast {\nblock0(v3: i32):\n    v0 -> v3\n    v2 -> v0\n    v4 = iconst.i32 42\n    v5 = iadd v0, v0\n    v1 -> v5\n    v6 = iconst.i32 23\n    v7 = iadd v1, v1\n}\n"
         );
     }
 
@@ -673,7 +673,7 @@ mod tests {
 
         assert_eq!(
             func.to_string(),
-            "function u0:0() fast {\nblock0 cold:\n\nblock1(v0: i32) cold:\n}\n"
+            "function u0() fast {\nblock0 cold:\n\nblock1(v0: i32) cold:\n}\n"
         );
     }
 }

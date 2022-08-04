@@ -447,12 +447,10 @@ impl Function {
 
     /// Returns an absolute source location for the given instruction.
     pub fn srcloc(&self, inst: Inst) -> SourceLoc {
-        self.stencil.srclocs[inst].expand(self.params.base_srcloc())
-    }
-
-    /// Sets a relative source location for the given instruction.
-    pub(crate) fn set_rel_srcloc(&mut self, inst: Inst, srcloc: RelSourceLoc) {
-        self.stencil.srclocs[inst] = srcloc;
+        self.params
+            .base_srcloc
+            .map(|base| self.stencil.srclocs[inst].expand(base))
+            .unwrap_or_default()
     }
 
     /// Declare a user-defined external function import, to be referenced in `ExtFuncData::User` later.

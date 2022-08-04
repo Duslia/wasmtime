@@ -2,7 +2,7 @@
 //!
 //! This module defines cursor data types that can be used for inserting instructions.
 
-use crate::ir::{self, RelSourceLoc};
+use crate::ir;
 
 /// The possible positions of a cursor.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -29,7 +29,7 @@ pub trait Cursor {
     fn set_position(&mut self, pos: CursorPosition);
 
     /// Get the source location that should be assigned to new instructions.
-    fn srcloc(&self) -> ir::RelSourceLoc;
+    fn srcloc(&self) -> ir::SourceLoc;
 
     /// Set the source location that should be assigned to new instructions.
     fn set_srcloc(&mut self, srcloc: ir::SourceLoc);
@@ -571,7 +571,7 @@ pub trait Cursor {
 /// encoding.
 pub struct FuncCursor<'f> {
     pos: CursorPosition,
-    srcloc: ir::RelSourceLoc,
+    srcloc: ir::SourceLoc,
 
     /// The referenced function.
     pub func: &'f mut ir::Function,
@@ -589,7 +589,7 @@ impl<'f> FuncCursor<'f> {
 
     /// Use the source location of `inst` for future instructions.
     pub fn use_srcloc(&mut self, inst: ir::Inst) {
-        self.srcloc = self.func.rel_srclocs()[inst];
+        self.srcloc = self.func.stencil.rel_srclocs()[inst].expand(self.func.params.base_srcloc());
     }
 
     /// Create an instruction builder that inserts an instruction at the current position.
@@ -607,12 +607,12 @@ impl<'f> Cursor for FuncCursor<'f> {
         self.pos = pos
     }
 
-    fn srcloc(&self) -> ir::RelSourceLoc {
+    fn srcloc(&self) -> ir::SourceLoc {
         self.srcloc
     }
 
     fn set_srcloc(&mut self, srcloc: ir::SourceLoc) {
-        self.srcloc = RelSourceLoc::from_base_offset(self.func.params.base_srcloc(), srcloc);
+        self.srcloc = srcloc;
     }
 
     fn layout(&self) -> &ir::Layout {
@@ -658,7 +658,7 @@ impl<'c, 'f> ir::InstInserterBase<'c> for &'c mut FuncCursor<'f> {
         }
         self.insert_inst(inst);
         if !self.srcloc.is_default() {
-            self.func.set_rel_srcloc(inst, self.srcloc);
+            self.func.set_srcloc(inst, self.srcloc);
         }
         &mut self.func.dfg
     }
