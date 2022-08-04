@@ -23,12 +23,8 @@
 use crate::alloc::string::String;
 use crate::alloc::vec::Vec;
 use crate::binemit::CodeOffset;
-use crate::ir::function::VersionMarker;
-use crate::ir::{
-    self, DataFlowGraph, DynamicStackSlot, DynamicStackSlots, ExtFuncData, ExternalName, Function,
-    Inst, JumpTables, Layout, LibCall, RelSourceLoc, SigRef, Signature, StackSlot, StackSlots,
-    TESTCASE_NAME_LENGTH,
-};
+use crate::ir::function::FunctionStencil;
+use crate::ir::{DynamicStackSlot, Function, StackSlot};
 use crate::machinst::{MachBufferFinalized, MachCompileResult, MachCompileResultBase, Stencil};
 use crate::ValueLabelsRanges;
 use crate::{binemit::CodeInfo, isa::TargetIsa, timing, CodegenResult};
@@ -36,7 +32,6 @@ use crate::{trace, Context};
 use alloc::borrow::{Cow, ToOwned};
 use alloc::string::ToString as _;
 use cranelift_entity::PrimaryMap;
-use cranelift_entity::SecondaryMap;
 
 impl Context {
     /// Compile the function, as in `compile`, but tries to reuse compiled artifacts from former
@@ -76,7 +71,7 @@ impl Context {
         let stencil = self.compile_stencil(isa)?;
 
         let _tt = timing::store_incremental_cache();
-        if let Ok(blob) = serialize_compiled(cache_key, &self.func, &stencil) {
+        if let Ok(blob) = serialize_compiled(cache_key, &stencil) {
             cache_store.insert(&cache_key_hash.0, blob);
         }
 
@@ -116,52 +111,6 @@ struct CachedFunc {
     stencil: MachCompileResultBase<Stencil>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-enum CachedExternalName {
-    User,
-    TestCase {
-        length: u8,
-        ascii: [u8; TESTCASE_NAME_LENGTH],
-    },
-    LibCall(LibCall),
-}
-
-impl CachedExternalName {
-    #[allow(dead_code)]
-    /// Not intended for use; see comment on top of `CacheKey`.
-    fn check_from_src(self) -> ExternalName {
-        match self {
-            CachedExternalName::User => ExternalName::User {
-                namespace: 0, // caching is resilient with respect to namespace/index
-                index: 0,
-            },
-            CachedExternalName::TestCase { length, ascii } => {
-                ExternalName::TestCase { length, ascii }
-            }
-            CachedExternalName::LibCall(libcall) => ExternalName::LibCall(libcall),
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
-struct CachedExtFuncData {
-    name: CachedExternalName,
-    signature: SigRef,
-    colocated: bool,
-}
-
-impl CachedExtFuncData {
-    #[allow(dead_code)]
-    /// Not intended for use; see comment on top of `CacheKey`.
-    fn check_from_src(self) -> ExtFuncData {
-        ExtFuncData {
-            name: self.name.check_from_src(),
-            signature: self.signature,
-            colocated: self.colocated,
-        }
-    }
-}
-
 /// Key for caching a single function's compilation.
 ///
 /// If two functions get the same `CacheKey`, then we can reuse the compiled artifacts, modulo some
@@ -171,20 +120,7 @@ impl CachedExtFuncData {
 /// structure. For that matter, there's a method `check_from_func`.
 #[derive(Clone, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct CacheKey {
-    version_marker: VersionMarker,
-    signature: Signature,
-    sized_stack_slots: StackSlots,
-    dynamic_stack_slots: DynamicStackSlots,
-    global_values: PrimaryMap<ir::GlobalValue, ir::GlobalValueData>,
-    heaps: PrimaryMap<ir::Heap, ir::HeapData>,
-    tables: PrimaryMap<ir::Table, ir::TableData>,
-    jump_tables: JumpTables,
-    dfg: DataFlowGraph,
-    layout: Layout,
-    stack_limit: Option<ir::GlobalValue>,
-    srclocs: SecondaryMap<Inst, RelSourceLoc>,
-
-    // Extra fields
+    stencil: FunctionStencil,
     parameters: CompileParameters,
 }
 
@@ -216,25 +152,13 @@ impl CacheKey {
     ///
     /// This is a bit expensive to compute, so it should be cached and reused as much as possible.
     fn new(isa: &dyn TargetIsa, f: &Function) -> Self {
-        let mut layout = f.layout.clone();
+        let mut stencil = f.stencil.clone();
         // Make sure the blocks and instructions are sequenced the same way as we might
         // have serialized them earlier. This is the symmetric of what's done in
         // `try_load`.
-        layout.full_renumber();
-
+        stencil.layout.full_renumber();
         CacheKey {
-            version_marker: f.version_marker,
-            signature: f.signature.clone(),
-            sized_stack_slots: f.sized_stack_slots.clone(),
-            dynamic_stack_slots: f.dynamic_stack_slots.clone(),
-            global_values: f.global_values.clone(),
-            heaps: f.heaps.clone(),
-            tables: f.tables.clone(),
-            jump_tables: f.jump_tables.clone(),
-            dfg: f.dfg.clone(),
-            layout,
-            stack_limit: f.stack_limit.clone(),
-            srclocs: f.rel_srclocs().clone(),
+            stencil,
             parameters: CompileParameters::from_isa(isa),
         }
     }
@@ -289,7 +213,6 @@ pub fn compute_cache_key(isa: &dyn TargetIsa, func: &Function) -> (CacheKey, Cac
 #[inline(never)]
 pub fn serialize_compiled(
     cache_key: CacheKey,
-    func: &Function,
     result: &MachCompileResultBase<Stencil>,
 ) -> Result<Vec<u8>, bincode::Error> {
     let cached = CachedFunc {
@@ -313,56 +236,17 @@ pub fn try_finish_recompile(
             // Make sure the blocks and instructions are sequenced the same way as we might
             // have serialized them earlier. This is the symmetric of what's done in
             // `CacheKey`'s ctor.
-            result.cache_key.layout.full_renumber();
+            result.cache_key.stencil.layout.full_renumber();
 
             if *cache_key == result.cache_key {
                 return Ok(result.stencil.apply_params(&func.params));
             }
 
             trace!("{} not read from cache: source mismatch", func.params.name);
-
-            //if cache_key.version_marker != result.cache_key.version_marker {
-            //trace!("     because of version marker")
-            //}
-            //if cache_key.signature != result.cache_key.signature {
-            //trace!("     because of signature")
-            //}
-            //if cache_key.stack_slots != result.cache_key.stack_slots {
-            //trace!("     because of stack slots")
-            //}
-            //if cache_key.global_values != result.cache_key.global_values {
-            //trace!("     because of global values")
-            //}
-            //if cache_key.heaps != result.cache_key.heaps {
-            //trace!("     because of heaps")
-            //}
-            //if cache_key.tables != result.cache_key.tables {
-            //trace!("     because of tables")
-            //}
-            //if cache_key.jump_tables != result.cache_key.jump_tables {
-            //trace!("     because of jump tables")
-            //}
-            //if cache_key.dfg != result.cache_key.dfg {
-            //trace!("     because of dfg")
-            //}
-            //if cache_key.layout != result.cache_key.layout {
-            //if func.layout.blocks().count() < 8 {
-            //trace!(
-            //"     because of layout:\n{:?}\n{:?}",
-            //cache_key.layout, result.cache_key.layout
-            //);
-            //} else {
-            //trace!("     because of layout",);
-            //}
-            //}
-            //if cache_key.stack_limit != result.cache_key.stack_limit {
-            //trace!("     because of stack limit")
-            //}
         }
 
         Err(err) => {
             trace!("Couldn't deserialize cache entry: {err}");
-            //log::debug!("Couldn't deserialize cache entry with key {hash:x}: {err}");
         }
     }
 

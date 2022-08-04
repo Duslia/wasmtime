@@ -198,9 +198,7 @@
 (type ValueLabel (primitive ValueLabel))
 (type UnwindInst (primitive UnwindInst))
 (type ExternalName (primitive ExternalName))
-(type ExternalNameStencil (primitive ExternalNameStencil))
 (type BoxExternalName (primitive BoxExternalName))
-(type BoxExternalNameStencil (primitive BoxExternalNameStencil))
 (type RelocDistance (primitive RelocDistance))
 
 ;;;; Primitive Type Conversions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -692,15 +690,15 @@
 
 ;; Accessor for `FuncRef`.
 
-(decl func_ref_data (SigRef ExternalNameStencil RelocDistance) FuncRef)
+(decl func_ref_data (SigRef ExternalName RelocDistance) FuncRef)
 (extern extractor infallible func_ref_data func_ref_data)
 
 ;; Accessor for `GobalValue`.
 
-(decl symbol_value_data (ExternalNameStencil RelocDistance i64) GlobalValue)
+(decl symbol_value_data (ExternalName RelocDistance i64) GlobalValue)
 (extern extractor symbol_value_data symbol_value_data)
 
-(decl box_external_name (ExternalNameStencil) BoxExternalNameStencil)
+(decl box_external_name (ExternalName) BoxExternalName)
 (extern constructor box_external_name box_external_name)
 
 ;; Accessor for `RelocDistance`.

@@ -734,7 +734,7 @@
        ;; Load an inline symbol reference.
        (LoadExtName
         (rd WritableReg)
-        (name BoxExternalNameStencil)
+        (name BoxExternalName)
         (offset i64))
 
        ;; Load address referenced by `mem` into `rd`.

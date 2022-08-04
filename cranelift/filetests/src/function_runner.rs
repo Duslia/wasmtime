@@ -271,7 +271,11 @@ fn make_trampoline(signature: &ir::Signature, isa: &dyn TargetIsa) -> Function {
     wrapper_sig.params.push(ir::AbiParam::new(pointer_type)); // Add the `callee_address` parameter.
     wrapper_sig.params.push(ir::AbiParam::new(pointer_type)); // Add the `values_vec` parameter.
 
-    let mut func = ir::Function::with_name_signature(ir::ExternalName::user(0, 0), wrapper_sig);
+    let mut func = ir::Function::with_name_signature(ir::ExternalName::default(), wrapper_sig);
+    func.declare_imported_user_function(ir::UserExternalName {
+        namespace: 0,
+        index: 0,
+    });
 
     // The trampoline has a single block filled with loads, one call to callee_address, and some loads.
     let mut builder_context = FunctionBuilderContext::new();

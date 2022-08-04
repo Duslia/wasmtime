@@ -48,7 +48,11 @@ fn define_simple_function(module: &mut JITModule) -> FuncId {
         .unwrap();
 
     let mut ctx = Context::new();
-    ctx.func = Function::with_name_signature(ExternalName::user(0, func_id.as_u32()), sig);
+    ctx.func = Function::with_name_signature(ExternalName::User(UserExternalNameRef::new(0)), sig);
+    ctx.func.declare_imported_user_function(UserExternalName {
+        namespace: 0,
+        index: func_id.as_u32(),
+    });
     let mut func_ctx = FunctionBuilderContext::new();
     {
         let mut bcx: FunctionBuilder = FunctionBuilder::new(&mut ctx.func, &mut func_ctx);
@@ -91,7 +95,11 @@ fn switch_error() {
         call_conv: CallConv::SystemV,
     };
 
-    let mut func = Function::with_name_signature(ExternalName::user(0, 0), sig);
+    let mut func = Function::with_name_signature(ExternalName::default(), sig);
+    func.declare_imported_user_function(UserExternalName {
+        namespace: 0,
+        index: 0,
+    });
 
     let mut func_ctx = FunctionBuilderContext::new();
     {
@@ -179,7 +187,12 @@ fn libcall_function() {
         .unwrap();
 
     let mut ctx = Context::new();
-    ctx.func = Function::with_name_signature(ExternalName::user(0, func_id.as_u32()), sig);
+    ctx.func = Function::with_name_signature(ExternalName::User(UserExternalNameRef::new(0)), sig);
+    ctx.func.declare_imported_user_function(UserExternalName {
+        namespace: 0,
+        index: func_id.as_u32(),
+    });
+
     let mut func_ctx = FunctionBuilderContext::new();
     {
         let mut bcx: FunctionBuilder = FunctionBuilder::new(&mut ctx.func, &mut func_ctx);

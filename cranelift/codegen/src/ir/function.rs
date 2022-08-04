@@ -27,9 +27,9 @@ use serde::ser::Serializer;
 #[cfg(feature = "enable-serde")]
 use serde::{Deserialize, Serialize};
 
-use super::extfunc::ExtFuncDataStencil;
+use super::entities::UserExternalNameRef;
 use super::extname::UserExternalName;
-use super::{ExternalNameStencil, RelSourceLoc, SourceLoc};
+use super::{RelSourceLoc, SourceLoc};
 
 /// A version marker used to ensure that serialized clif ir is never deserialized with a
 /// different version of Cranelift.
@@ -77,7 +77,7 @@ pub struct FunctionParameters {
     base_srcloc: Option<SourceLoc>,
 
     /// External user-defined function references.
-    pub user_named_funcs: SecondaryMap<FuncRef, UserExternalName>,
+    pub user_named_funcs: PrimaryMap<UserExternalNameRef, UserExternalName>,
 }
 
 impl FunctionParameters {
@@ -105,7 +105,10 @@ impl FunctionParameters {
 }
 
 /// Function fields needed when compiling a function.
-#[derive(Clone)]
+///
+/// Additionally, these fields can be the same for two functions that would be compiled the same
+/// way, and finalized by applying `FunctionParameters` onto their `CompiledCodeStencil`.
+#[derive(Clone, PartialEq, Hash)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct FunctionStencil {
     /// A version marker used to ensure that serialized clif ir is never deserialized with a
@@ -145,7 +148,7 @@ pub struct FunctionStencil {
     ///
     /// Track the original source location for each instruction. The source locations are not
     /// interpreted by Cranelift, only preserved.
-    pub(crate) srclocs: SourceLocs, // TODO(bnjbvr) remove the pub(crate))
+    srclocs: SourceLocs,
 
     /// An optional global value which represents an expression evaluating to
     /// the stack limit for this function. This `GlobalValue` will be
@@ -452,32 +455,17 @@ impl Function {
         self.stencil.srclocs[inst] = srcloc;
     }
 
+    /// Declare a user-defined external function import, to be referenced in `ExtFuncData::User` later.
+    pub fn declare_imported_user_function(
+        &mut self,
+        name: UserExternalName,
+    ) -> UserExternalNameRef {
+        self.params.user_named_funcs.push(name)
+    }
+
     /// Declare an external function import.
     pub fn import_function(&mut self, data: ExtFuncData) -> FuncRef {
-        let func_ref = self.stencil.dfg.ext_funcs.next_key();
-
-        let (name, user_ext_name) = match data.name {
-            ExternalName::User { namespace, index } => (
-                ExternalNameStencil::User(func_ref),
-                Some(UserExternalName { namespace, index }),
-            ),
-            ExternalName::TestCase { length, ascii } => {
-                (ExternalNameStencil::TestCase { length, ascii }, None)
-            }
-            ExternalName::LibCall(libcall) => (ExternalNameStencil::LibCall(libcall), None),
-        };
-
-        let func_ref = self.stencil.dfg.ext_funcs.push(ExtFuncDataStencil {
-            name,
-            signature: data.signature,
-            colocated: data.colocated,
-        });
-
-        if let Some(name) = user_ext_name {
-            self.params.user_named_funcs[func_ref] = name;
-        }
-
-        func_ref
+        self.stencil.dfg.ext_funcs.push(data)
     }
 }
 

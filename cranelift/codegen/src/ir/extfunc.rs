@@ -14,8 +14,6 @@ use core::str::FromStr;
 #[cfg(feature = "enable-serde")]
 use serde::{Deserialize, Serialize};
 
-use super::extname::ExternalNameStencil;
-
 /// Function signature.
 ///
 /// The function signature describes the types of formal parameters and return values along with
@@ -358,30 +356,10 @@ impl FromStr for ArgumentPurpose {
     }
 }
 
-/// TODO
-#[derive(Clone, PartialEq, Hash)]
-#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
-pub struct ExtFuncDataStencil {
-    pub name: ExternalNameStencil,
-    pub signature: SigRef,
-    pub colocated: bool,
-}
-
-impl ExtFuncDataStencil {
-    /// Return an estimate of the distance to the referred-to function symbol.
-    pub fn reloc_distance(&self) -> RelocDistance {
-        if self.colocated {
-            RelocDistance::Near
-        } else {
-            RelocDistance::Far
-        }
-    }
-}
-
 /// An external function.
 ///
 /// Information about a function that can be called directly with a direct `call` instruction.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Hash)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct ExtFuncData {
     /// Name of the external function.
@@ -402,6 +380,17 @@ pub struct ExtFuncData {
     /// See the documentation for [`RelocDistance`](crate::machinst::RelocDistance) for more details. A
     /// `colocated` flag value of `true` implies `RelocDistance::Near`.
     pub colocated: bool,
+}
+
+impl ExtFuncData {
+    /// Return an estimate of the distance to the referred-to function symbol.
+    pub fn reloc_distance(&self) -> RelocDistance {
+        if self.colocated {
+            RelocDistance::Near
+        } else {
+            RelocDistance::Far
+        }
+    }
 }
 
 impl fmt::Display for ExtFuncData {

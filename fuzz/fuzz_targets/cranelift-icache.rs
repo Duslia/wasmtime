@@ -3,7 +3,7 @@
 use cranelift_codegen::{
     cursor::{Cursor, FuncCursor},
     incremental_cache as icache,
-    ir::{self, immediates::Imm64, ExternalName},
+    ir::{self, immediates::Imm64, ExternalName, UserExternalNameRef},
     isa, settings, Context,
 };
 use libfuzzer_sys::fuzz_target;
@@ -35,7 +35,7 @@ fuzz_target!(|func: SingleFunction| {
         Err(_) => return,
     };
 
-    let serialized = icache::serialize_compiled(cache_key.clone(), &func, &prev_stencil)
+    let serialized = icache::serialize_compiled(cache_key.clone(), &prev_stencil)
         .expect("serialization failure");
 
     let prev_result = prev_stencil.apply_params(&func.params);
@@ -51,18 +51,17 @@ fuzz_target!(|func: SingleFunction| {
 
     // If the func has at least one user-defined func ref, change it to match a
     // different external function.
-    let expect_cache_hit = if let Some((func_ref, namespace, index)) =
+    let expect_cache_hit = if let Some((func_ref, user_ext_ref)) =
         func.dfg.ext_funcs.iter().find_map(|(func_ref, data)| {
-            if let ExternalName::User { namespace, index } = &data.name {
-                Some((func_ref, *namespace, *index))
+            if let ExternalName::User(user_ext_ref) = &data.name {
+                Some((func_ref, user_ext_ref))
             } else {
                 None
             }
         }) {
-        func.dfg.ext_funcs[func_ref].name = ExternalName::User {
-            namespace: namespace.checked_add(1).unwrap_or(namespace - 1),
-            index: index.checked_add(1).unwrap_or(index - 1),
-        };
+        let index = user_ext_ref.as_u32();
+        let index = index.checked_add(1).unwrap_or(index - 1);
+        func.dfg.ext_funcs[func_ref].name = ExternalName::User(UserExternalNameRef::new(index));
         true
     } else {
         // otherwise just randomly change one instruction in the middle and see what happens.

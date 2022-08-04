@@ -10,12 +10,12 @@ use crate::testcommand::TestCommand;
 use crate::testfile::{Comment, Details, Feature, TestFile};
 use cranelift_codegen::data_value::DataValue;
 use cranelift_codegen::entity::EntityRef;
-use cranelift_codegen::ir;
 use cranelift_codegen::ir::entities::{AnyEntity, DynamicType};
 use cranelift_codegen::ir::immediates::{Ieee32, Ieee64, Imm64, Offset32, Uimm32, Uimm64};
 use cranelift_codegen::ir::instructions::{InstructionData, InstructionFormat, VariableArgs};
 use cranelift_codegen::ir::types::INVALID;
 use cranelift_codegen::ir::types::*;
+use cranelift_codegen::ir::{self, UserExternalNameRef};
 use cranelift_codegen::ir::{
     AbiParam, ArgumentExtension, ArgumentPurpose, Block, Constant, ConstantData, DynamicStackSlot,
     DynamicStackSlotData, DynamicTypeData, ExtFuncData, ExternalName, FuncRef, Function,
@@ -1329,25 +1329,11 @@ impl<'a> Parser<'a> {
                 s.parse()
                     .map_err(|_| self.error("invalid test case or libcall name"))
             }
-            Some(Token::UserRef(namespace)) => {
+            Some(Token::UserRef(func_ref)) => {
                 self.consume();
-                match self.token() {
-                    Some(Token::Colon) => {
-                        self.consume();
-                        match self.token() {
-                            Some(Token::Integer(index_str)) => {
-                                let index: u32 =
-                                    u32::from_str_radix(index_str, 10).map_err(|_| {
-                                        self.error("the integer given overflows the u32 type")
-                                    })?;
-                                self.consume();
-                                Ok(ExternalName::user(namespace, index))
-                            }
-                            _ => err!(self.loc, "expected integer"),
-                        }
-                    }
-                    _ => err!(self.loc, "expected colon"),
-                }
+                Ok(ExternalName::user(UserExternalNameRef::new(
+                    func_ref as usize,
+                )))
             }
             _ => err!(self.loc, "expected external name"),
         }

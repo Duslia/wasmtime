@@ -142,7 +142,7 @@
 
 use crate::binemit::{Addend, CodeOffset, Reloc, StackMap};
 use crate::ir::function::FunctionParameters;
-use crate::ir::{ExternalName, ExternalNameStencil, Opcode, RelSourceLoc, SourceLoc, TrapCode};
+use crate::ir::{ExternalName, Opcode, RelSourceLoc, SourceLoc, TrapCode};
 use crate::isa::unwind::UnwindInst;
 use crate::machinst::{
     BlockIndex, MachInstLabelUse, TextSectionBuilder, VCodeConstant, VCodeConstants, VCodeInst,
@@ -163,15 +163,10 @@ use serde::{Deserialize, Serialize};
 pub trait CompilePhase {
     type MachSrcLocType: for<'a> Deserialize<'a> + Serialize + core::fmt::Debug + PartialEq + Clone;
     type SourceLocType: for<'a> Deserialize<'a> + Serialize + core::fmt::Debug + PartialEq + Clone;
-    type ExternalNameType: for<'a> Deserialize<'a>
-        + Serialize
-        + core::fmt::Debug
-        + PartialEq
-        + Clone;
 }
 
 #[cfg(not(feature = "enable-serde"))]
-pub trait CompileStatus {
+pub trait CompilePhase {
     type MachSrcLocType: core::fmt::Debug + PartialEq + Clone;
     type SourceLocType: core::fmt::Debug + PartialEq + Clone;
 }
@@ -180,6 +175,7 @@ pub trait CompileStatus {
 ///
 /// Only used internally.
 #[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct Stencil;
 
 /// Status of a compiled artifact ready to use.
@@ -189,13 +185,11 @@ pub struct Final;
 impl CompilePhase for Stencil {
     type MachSrcLocType = MachSrcLoc<Stencil>;
     type SourceLocType = RelSourceLoc;
-    type ExternalNameType = ExternalNameStencil;
 }
 
 impl CompilePhase for Final {
     type MachSrcLocType = MachSrcLoc<Final>;
     type SourceLocType = SourceLoc;
-    type ExternalNameType = ExternalName;
 }
 
 /// A buffer of output to be produced, fixed up, and then emitted to a CodeSink
@@ -211,7 +205,7 @@ pub struct MachBuffer<I: VCodeInst> {
     /// Any relocations referring to this code. Note that only *external*
     /// relocations are tracked here; references to labels within the buffer are
     /// resolved before emission.
-    relocs: SmallVec<[MachReloc<Stencil>; 16]>,
+    relocs: SmallVec<[MachReloc; 16]>,
     /// Any trap records referring to this code.
     traps: SmallVec<[MachTrap; 16]>,
     /// Any call site records referring to this code.
@@ -276,11 +270,7 @@ impl MachBufferFinalized<Stencil> {
     pub(crate) fn apply_params(self, params: &FunctionParameters) -> MachBufferFinalized<Final> {
         MachBufferFinalized {
             data: self.data,
-            relocs: self
-                .relocs
-                .into_iter()
-                .map(|reloc| reloc.apply_params(params))
-                .collect(),
+            relocs: self.relocs,
             traps: self.traps,
             call_sites: self.call_sites,
             srclocs: self
@@ -304,7 +294,7 @@ pub struct MachBufferFinalized<T: CompilePhase> {
     /// Any relocations referring to this code. Note that only *external*
     /// relocations are tracked here; references to labels within the buffer are
     /// resolved before emission.
-    pub(crate) relocs: SmallVec<[MachReloc<T>; 16]>,
+    pub(crate) relocs: SmallVec<[MachReloc; 16]>,
     /// Any trap records referring to this code.
     pub(crate) traps: SmallVec<[MachTrap; 16]>,
     /// Any call site records referring to this code.
@@ -1298,7 +1288,7 @@ impl<I: VCodeInst> MachBuffer<I> {
     }
 
     /// Add an external relocation at the current offset.
-    pub fn add_reloc(&mut self, kind: Reloc, name: &ExternalNameStencil, addend: Addend) {
+    pub fn add_reloc(&mut self, kind: Reloc, name: &ExternalName, addend: Addend) {
         let name = name.clone();
         // FIXME(#3277): This should use `I::LabelUse::from_reloc` to optionally
         // generate a label-use statement to track whether an island is possibly
@@ -1452,7 +1442,7 @@ impl<T: CompilePhase> MachBufferFinalized<T> {
     }
 
     /// Get the list of external relocations for this code.
-    pub fn relocs(&self) -> &[MachReloc<T>] {
+    pub fn relocs(&self) -> &[MachReloc] {
         &self.relocs[..]
     }
 
@@ -1501,40 +1491,16 @@ struct MachLabelFixup<I: VCodeInst> {
 /// A relocation resulting from a compilation.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "enable-serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct MachReloc<T: CompilePhase> {
+pub struct MachReloc {
     /// The offset at which the relocation applies, *relative to the
     /// containing section*.
     pub offset: CodeOffset,
     /// The kind of relocation.
     pub kind: Reloc,
     /// The external symbol / name to which this relocation refers.
-    pub name: T::ExternalNameType,
+    pub name: ExternalName,
     /// The addend to add to the symbol value.
     pub addend: i64,
-}
-
-impl MachReloc<Stencil> {
-    fn apply_params(self, params: &FunctionParameters) -> MachReloc<Final> {
-        let name = match self.name {
-            ExternalNameStencil::User(func_ref) => {
-                let func = params.user_named_funcs[func_ref];
-                ExternalName::User {
-                    namespace: func.namespace,
-                    index: func.index,
-                }
-            }
-            ExternalNameStencil::TestCase { length, ascii } => {
-                ExternalName::TestCase { length, ascii }
-            }
-            ExternalNameStencil::LibCall(libcall) => ExternalName::LibCall(libcall),
-        };
-        MachReloc {
-            offset: self.offset,
-            kind: self.kind,
-            name,
-            addend: self.addend,
-        }
-    }
 }
 
 /// A trap record resulting from a compilation.
@@ -1703,7 +1669,7 @@ mod test {
     use cranelift_entity::EntityRef as _;
 
     use super::*;
-    use crate::ir::FuncRef;
+    use crate::ir::UserExternalNameRef;
     use crate::isa::aarch64::inst::xreg;
     use crate::isa::aarch64::inst::{BranchTarget, CondBrKind, EmitInfo, Inst};
     use crate::machinst::MachInstEmit;
@@ -2087,9 +2053,17 @@ mod test {
         buf.add_trap(TrapCode::IntegerOverflow);
         buf.add_trap(TrapCode::IntegerDivisionByZero);
         buf.add_call_site(Opcode::Call);
-        buf.add_reloc(Reloc::Abs4, &ExternalNameStencil::User(FuncRef::new(0)), 0);
+        buf.add_reloc(
+            Reloc::Abs4,
+            &ExternalName::User(UserExternalNameRef::new(0)),
+            0,
+        );
         buf.put1(3);
-        buf.add_reloc(Reloc::Abs8, &ExternalNameStencil::User(FuncRef::new(1)), 1);
+        buf.add_reloc(
+            Reloc::Abs8,
+            &ExternalName::User(UserExternalNameRef::new(1)),
+            1,
+        );
         buf.put1(4);
 
         let buf = buf.finish();

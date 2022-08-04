@@ -1,7 +1,7 @@
 //! This module defines x86_64-specific machine instruction types.
 
 use crate::binemit::{Addend, CodeOffset, Reloc, StackMap};
-use crate::ir::{types, ExternalName, Opcode, RelSourceLoc, TrapCode, Type, ExternalNameStencil};
+use crate::ir::{types, ExternalName, Opcode, RelSourceLoc, TrapCode, Type};
 use crate::isa::x64::abi::X64ABIMachineSpec;
 use crate::isa::x64::inst::regs::pretty_print_reg;
 use crate::isa::x64::settings as x64_settings;
@@ -683,7 +683,7 @@ impl Inst {
     }
 
     pub(crate) fn call_known(
-        dest: ExternalNameStencil,
+        dest: ExternalName,
         uses: SmallVec<[Reg; 8]>,
         defs: SmallVec<[Writable<Reg>; 8]>,
         clobbers: PRegSet,

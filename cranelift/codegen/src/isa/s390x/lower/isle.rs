@@ -3,7 +3,7 @@
 // Pull in the ISLE generated code.
 pub mod generated_code;
 
-use crate::ir::ExternalNameStencil;
+use crate::ir::ExternalName;
 // Types that the generated ISLE code uses via `use super::*`.
 use crate::isa::s390x::abi::S390xMachineDeps;
 use crate::isa::s390x::inst::{
@@ -84,7 +84,7 @@ where
             .accumulate_outgoing_args_size(off as u32);
     }
 
-    fn abi_call_info(&mut self, abi: &ABISig, name: ExternalNameStencil, opcode: &Opcode) -> BoxCallInfo {
+    fn abi_call_info(&mut self, abi: &ABISig, name: ExternalName, opcode: &Opcode) -> BoxCallInfo {
         let (uses, defs, clobbers) = abi.call_uses_defs_clobbers::<S390xMachineDeps>();
         Box::new(CallInfo {
             dest: name.clone(),
@@ -605,7 +605,7 @@ where
     }
 
     #[inline]
-    fn memarg_symbol(&mut self, name: ExternalNameStencil, offset: i32, flags: MemFlags) -> MemArg {
+    fn memarg_symbol(&mut self, name: ExternalName, offset: i32, flags: MemFlags) -> MemArg {
         MemArg::Symbol {
             name: Box::new(name),
             offset,

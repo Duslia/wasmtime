@@ -28,11 +28,6 @@ use std::string::String;
 use std::vec::Vec;
 use wasmparser::{FuncValidator, FunctionBody, Operator, ValidatorResources, WasmFeatures};
 
-/// Compute a `ir::ExternalName` for a given wasm function index.
-fn get_func_name(func_index: FuncIndex) -> ir::ExternalName {
-    ir::ExternalName::user(0, func_index.as_u32())
-}
-
 /// A collection of names under which a given entity is exported.
 pub struct Exportable<T> {
     /// A wasm entity.
@@ -222,6 +217,9 @@ impl DummyEnvironment {
 pub struct DummyFuncEnvironment<'dummy_environment> {
     pub mod_info: &'dummy_environment DummyModuleInfo,
 
+    /// User-defined external functions.
+    ext_names: SecondaryMap<FuncIndex, Option<ir::ExternalName>>,
+
     return_mode: ReturnMode,
 
     /// Expected reachability data (before/after for each op) to assert. This is used for testing.
@@ -238,6 +236,7 @@ impl<'dummy_environment> DummyFuncEnvironment<'dummy_environment> {
             mod_info,
             return_mode,
             expected_reachability,
+            ext_names: Default::default(),
         }
     }
 
@@ -359,7 +358,19 @@ impl<'dummy_environment> FuncEnvironment for DummyFuncEnvironment<'dummy_environ
         // A real implementation would probably add a `vmctx` argument.
         // And maybe attempt some signature de-duplication.
         let signature = func.import_signature(self.vmctx_sig(sigidx));
-        let name = get_func_name(index);
+
+        let name = if let Some(name) = &self.ext_names[index] {
+            name.clone()
+        } else {
+            let name =
+                ir::ExternalName::User(func.declare_imported_user_function(ir::UserExternalName {
+                    namespace: 0,
+                    index: index.as_u32(),
+                }));
+            self.ext_names[index] = Some(name.clone());
+            name
+        };
+
         Ok(func.import_function(ir::ExtFuncData {
             name,
             signature,
@@ -870,12 +881,25 @@ impl<'data> ModuleEnvironment<'data> for DummyEnvironment {
             );
             let func_index =
                 FuncIndex::new(self.get_num_func_imports() + self.info.function_bodies.len());
-            let name = get_func_name(func_index);
+
+            // Predict that the first user external name ref will be 0; this is checked below.
+            let self_func_ref = ir::UserExternalNameRef::new(0);
+            let name = ir::ExternalName::User(self_func_ref);
+            func_environ.ext_names[func_index] = Some(name.clone());
+
             let sig = func_environ.vmctx_sig(self.get_func_type(func_index));
             let mut func = ir::Function::with_name_signature(name, sig);
+
+            let actual_self_func_ref = func.declare_imported_user_function(ir::UserExternalName {
+                namespace: 0,
+                index: func_index.as_u32(),
+            });
+            assert_eq!(actual_self_func_ref, self_func_ref);
+
             if self.debug_info {
                 func.collect_debug_info();
             }
+
             self.trans
                 .translate_body(&mut validator, body, &mut func, &mut func_environ)?;
             func

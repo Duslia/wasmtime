@@ -1,13 +1,15 @@
 use crate::builder::LinkOptions;
 use crate::debug::{DwarfSectionRelocTarget, ModuleMemoryOffset};
-use crate::func_environ::{get_func_name, FuncEnvironment};
+use crate::func_environ::FuncEnvironment;
 use crate::obj::ModuleTextBuilder;
 use crate::{
     blank_sig, func_signature, indirect_signature, value_type, wasmtime_call_conv,
     CompiledFunction, CompiledFunctions, FunctionAddressMap, Relocation, RelocationTarget,
 };
 use anyhow::{Context as _, Result};
-use cranelift_codegen::ir::{self, ExternalName, InstBuilder, MemFlags, Value};
+use cranelift_codegen::ir::{
+    self, ExternalName, Function, InstBuilder, MemFlags, UserExternalName, Value,
+};
 use cranelift_codegen::isa::TargetIsa;
 use cranelift_codegen::print_errors::pretty_error;
 use cranelift_codegen::Context;
@@ -200,13 +202,15 @@ impl wasmtime_environ::Compiler for Compiler {
             incremental_cache_ctx: mut cache_ctx,
         } = self.take_context();
 
-        context.func.params.name = get_func_name(func_index);
         context.func.signature = func_signature(isa, translation, types, func_index);
         if tunables.generate_native_debuginfo {
             context.func.collect_debug_info();
         }
 
         let mut func_env = FuncEnvironment::new(isa, translation, types, tunables);
+
+        let name = func_env.ensure_func_name(&mut context.func, func_index);
+        context.func.params.name = name;
 
         // The `stack_limit` global value below is the implementation of stack
         // overflow checks in Wasmtime.
@@ -275,7 +279,7 @@ impl wasmtime_environ::Compiler for Compiler {
             .buffer
             .relocs()
             .into_iter()
-            .map(mach_reloc_to_reloc)
+            .map(|item| mach_reloc_to_reloc(&context.func, item))
             .collect::<Vec<_>>();
 
         let traps = result
@@ -563,7 +567,8 @@ impl Compiler {
             incremental_cache_ctx: mut cache_ctx,
         } = self.take_context();
 
-        context.func = ir::Function::with_name_signature(ExternalName::user(0, 0), host_signature);
+        // The name doesn't matter here.
+        context.func = ir::Function::with_name_signature(ExternalName::default(), host_signature);
 
         // This trampoline will load all the parameters from the `values_vec`
         // that is passed in and then call the real function (also passed
@@ -675,8 +680,9 @@ impl Compiler {
             incremental_cache_ctx: mut cache_ctx,
         } = self.take_context();
 
+        // The name doesn't matter here.
         context.func =
-            ir::Function::with_name_signature(ir::ExternalName::user(0, 0), wasm_signature);
+            ir::Function::with_name_signature(ir::ExternalName::default(), wasm_signature);
 
         let mut builder = FunctionBuilder::new(&mut context.func, func_translator.context());
         let block0 = builder.create_block();
@@ -991,14 +997,15 @@ fn collect_address_maps(
     }
 }
 
-fn mach_reloc_to_reloc(reloc: &MachReloc) -> Relocation {
+fn mach_reloc_to_reloc(func: &Function, reloc: &MachReloc) -> Relocation {
     let &MachReloc {
         offset,
         kind,
         ref name,
         addend,
     } = reloc;
-    let reloc_target = if let ExternalName::User { namespace, index } = *name {
+    let reloc_target = if let ExternalName::User(user_func_ref) = *name {
+        let UserExternalName { namespace, index } = func.params.user_named_funcs[user_func_ref];
         debug_assert_eq!(namespace, 0);
         RelocationTarget::UserFunc(FuncIndex::from_u32(index))
     } else if let ExternalName::LibCall(libcall) = *name {

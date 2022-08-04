@@ -839,7 +839,7 @@
     ;; Load an inline symbol reference with RelocDistance::Far.
     (LoadExtNameFar
       (rd WritableReg)
-      (name BoxExternalNameStencil)
+      (name BoxExternalName)
       (offset i64))
 
     ;; Load address referenced by `mem` into `rd`.
@@ -1552,7 +1552,7 @@
 (decl memarg_reg_plus_off (Reg i64 u8 MemFlags) MemArg)
 (extern constructor memarg_reg_plus_off memarg_reg_plus_off)
 
-(decl memarg_symbol (ExternalNameStencil i32 MemFlags) MemArg)
+(decl memarg_symbol (ExternalName i32 MemFlags) MemArg)
 (extern constructor memarg_symbol memarg_symbol)
 
 ;; Create a MemArg refering to a stack address formed by
@@ -2293,10 +2293,10 @@
         dst))
 
 ;; Helper for emitting `MInst.LoadExtNameFar` instructions.
-(decl load_ext_name_far (ExternalNameStencil i64) Reg)
+(decl load_ext_name_far (ExternalName i64) Reg)
 (rule (load_ext_name_far name offset)
       (let ((dst WritableReg (temp_writable_reg $I64))
-            (boxed_name BoxExternalNameStencil (box_external_name name))
+            (boxed_name BoxExternalName (box_external_name name))
             (_ Unit (emit (MInst.LoadExtNameFar dst boxed_name offset))))
         dst))
 
@@ -3222,7 +3222,7 @@
 (decl abi_sig (SigRef) ABISig)
 (extern constructor abi_sig abi_sig)
 
-(decl abi_call_info (ABISig ExternalNameStencil Opcode) BoxCallInfo)
+(decl abi_call_info (ABISig ExternalName Opcode) BoxCallInfo)
 (extern constructor abi_call_info abi_call_info)
 
 (decl abi_call_ind_info (ABISig Reg Opcode) BoxCallIndInfo)
@@ -3231,7 +3231,7 @@
 (decl writable_link_reg () WritableReg)
 (rule (writable_link_reg) (writable_gpr 14))
 
-(decl abi_call (ABISig ExternalNameStencil Opcode) SideEffectNoResult)
+(decl abi_call (ABISig ExternalName Opcode) SideEffectNoResult)
 (rule (abi_call abi name opcode)
       (call_impl (writable_link_reg) (abi_call_info abi name opcode)))
 

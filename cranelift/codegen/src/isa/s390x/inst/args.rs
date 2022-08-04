@@ -38,7 +38,7 @@ pub enum MemArg {
 
     /// PC-relative Reference to a near symbol.
     Symbol {
-        name: Box<ExternalNameStencil>,
+        name: Box<ExternalName>,
         offset: i32,
         flags: MemFlags,
     },

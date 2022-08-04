@@ -140,7 +140,7 @@ mod tests {
 
     fn create_function(call_conv: CallConv, stack_slot: Option<StackSlotData>) -> Function {
         let mut func =
-            Function::with_name_signature(ExternalName::user(0, 0), Signature::new(call_conv));
+            Function::with_name_signature(ExternalName::default(), Signature::new(call_conv));
 
         let block0 = func.dfg.make_block();
         let mut pos = FuncCursor::new(&mut func);
@@ -187,7 +187,7 @@ mod tests {
     ) -> Function {
         let mut sig = Signature::new(call_conv);
         sig.params.push(AbiParam::new(types::I32));
-        let mut func = Function::with_name_signature(ExternalName::user(0, 0), sig);
+        let mut func = Function::with_name_signature(ExternalName::default(), sig);
 
         let block0 = func.dfg.make_block();
         let v0 = func.dfg.append_block_param(block0, types::I32);

@@ -6,7 +6,7 @@ use core::str::FromStr;
 #[cfg(feature = "enable-serde")]
 use serde::{Deserialize, Serialize};
 
-use super::extname::ExternalNameStencil;
+use super::ExternalName;
 
 /// The name of a runtime library routine.
 ///
@@ -181,7 +181,7 @@ fn find_funcref(libcall: LibCall, func: &Function) -> Option<FuncRef> {
     // If we get this wrong, worst case we'll have duplicate libcall decls which is harmless.
     for (fref, func_data) in func.dfg.ext_funcs.iter().rev() {
         match func_data.name {
-            ExternalNameStencil::LibCall(lc) => {
+            ExternalName::LibCall(lc) => {
                 if lc == libcall {
                     return Some(fref);
                 }

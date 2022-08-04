@@ -3,7 +3,7 @@
 // Pull in the ISLE generated code.
 pub(crate) mod generated_code;
 use crate::{
-    ir::{AtomicRmwOp, ExternalNameStencil},
+    ir::{AtomicRmwOp, ExternalName},
     machinst::{InputSourceInst, Reg, Writable},
 };
 use generated_code::{Context, MInst};
@@ -596,7 +596,7 @@ where
     fn gen_call(
         &mut self,
         sig_ref: SigRef,
-        extname: ExternalNameStencil,
+        extname: ExternalName,
         dist: RelocDistance,
         args @ (inputs, off): ValueSlice,
     ) -> InstOutput {

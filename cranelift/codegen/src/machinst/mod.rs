@@ -58,6 +58,9 @@ use regalloc2::{Allocation, VReg};
 use smallvec::{smallvec, SmallVec};
 use std::string::String;
 
+#[cfg(feature = "enable-serde")]
+use serde::{Deserialize, Serialize};
+
 #[macro_use]
 pub mod isle;
 
@@ -274,6 +277,7 @@ pub trait MachInstEmitState<I: MachInst>: Default + Clone + Debug {
 /// The result of a `MachBackend::compile_function()` call. Contains machine
 /// code (as bytes) and a disassembly, if requested.
 #[derive(PartialEq, Debug, Clone)]
+#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct MachCompileResultBase<T: CompilePhase> {
     /// Machine code.
     pub buffer: MachBufferFinalized<T>,

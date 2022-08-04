@@ -46,7 +46,7 @@ fn one_way_jmp(sink: &mut MachBuffer<Inst>, cc: CC, label: MachLabel) {
 }
 
 /// Emits a relocation, attaching the current source location as well.
-fn emit_reloc(sink: &mut MachBuffer<Inst>, kind: Reloc, name: &ExternalNameStencil, addend: Addend) {
+fn emit_reloc(sink: &mut MachBuffer<Inst>, kind: Reloc, name: &ExternalName, addend: Addend) {
     sink.add_reloc(kind, name, addend);
 }
 
@@ -2904,7 +2904,7 @@ pub(crate) fn emit(
             emit_reloc(
                 sink,
                 Reloc::X86CallPLTRel4,
-                &ExternalNameStencil::LibCall(LibCall::ElfTlsGetAddr),
+                &ExternalName::LibCall(LibCall::ElfTlsGetAddr),
                 -4,
             );
             sink.put4(0); // offset

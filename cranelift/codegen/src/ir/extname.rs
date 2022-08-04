@@ -9,10 +9,11 @@ use core::cmp;
 use core::fmt::{self, Write};
 use core::str::FromStr;
 
+use cranelift_entity::EntityRef as _;
 #[cfg(feature = "enable-serde")]
 use serde::{Deserialize, Serialize};
 
-use super::FuncRef;
+use super::entities::UserExternalNameRef;
 
 pub(crate) const TESTCASE_NAME_LENGTH: usize = 16;
 
@@ -22,36 +23,9 @@ pub(crate) const TESTCASE_NAME_LENGTH: usize = 16;
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct UserExternalName {
     /// Arbitrary.
-    pub(crate) namespace: u32,
+    pub namespace: u32,
     /// Arbitrary.
-    pub(crate) index: u32,
-}
-
-#[derive(Debug, Clone, PartialEq, Hash)]
-#[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
-pub enum ExternalNameStencil {
-    User(FuncRef),
-    TestCase {
-        length: u8,
-        ascii: [u8; TESTCASE_NAME_LENGTH],
-    },
-    LibCall(LibCall),
-}
-
-impl fmt::Display for ExternalNameStencil {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Self::User(func_ref) => write!(f, "u%{}", func_ref),
-            Self::TestCase { length, ascii } => {
-                f.write_char('%')?;
-                for byte in ascii.iter().take(length as usize) {
-                    f.write_char(*byte as char)?;
-                }
-                Ok(())
-            }
-            Self::LibCall(lc) => write!(f, "%{}", lc),
-        }
-    }
+    pub index: u32,
 }
 
 /// The name of an external is either a reference to a user-defined symbol
@@ -68,14 +42,8 @@ impl fmt::Display for ExternalNameStencil {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub enum ExternalName {
-    /// A name in a user-defined symbol table. Cranelift does not interpret
-    /// these numbers in any way.
-    User {
-        /// Arbitrary.
-        namespace: u32,
-        /// Arbitrary.
-        index: u32,
-    },
+    /// A reference to a name in a user-defined symbol table.
+    User(UserExternalNameRef),
     /// A test case function name of up to a hardcoded amount of ascii
     /// characters. This is not intended to be used outside test cases.
     TestCase {
@@ -86,6 +54,12 @@ pub enum ExternalName {
     },
     /// A well-known runtime library function.
     LibCall(LibCall),
+}
+
+impl Default for ExternalName {
+    fn default() -> Self {
+        Self::User(UserExternalNameRef::new(0))
+    }
 }
 
 impl ExternalName {
@@ -112,30 +86,24 @@ impl ExternalName {
         }
     }
 
-    /// Create a new external name from user-provided integer indices.
+    /// Create a new external name from a user-defined external function reference.
     ///
     /// # Examples
     /// ```rust
-    /// # use cranelift_codegen::ir::ExternalName;
-    /// // Create `ExternalName` from integer indices
-    /// let name = ExternalName::user(123, 456);
-    /// assert_eq!(name.to_string(), "u123:456");
+    /// # use cranelift_codegen::ir::{ExternalName, UserExternalNameRef};
+    /// let user_func_ref: UserExternalNameRef = Default::default(); // usually obtained with `Function::declare_imported_user_function()`
+    /// let name = ExternalName::user(user_func_ref);
+    /// assert_eq!(name.to_string(), "u0");
     /// ```
-    pub fn user(namespace: u32, index: u32) -> Self {
-        Self::User { namespace, index }
-    }
-}
-
-impl Default for ExternalName {
-    fn default() -> Self {
-        Self::user(0, 0)
+    pub fn user(func_ref: UserExternalNameRef) -> Self {
+        Self::User(func_ref)
     }
 }
 
 impl fmt::Display for ExternalName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Self::User { namespace, index } => write!(f, "u{}:{}", namespace, index),
+            Self::User(func_ref) => write!(f, "{}", func_ref),
             Self::TestCase { length, ascii } => {
                 f.write_char('%')?;
                 for byte in ascii.iter().take(length as usize) {
@@ -163,9 +131,10 @@ impl FromStr for ExternalName {
 #[cfg(test)]
 mod tests {
     use super::ExternalName;
-    use crate::ir::LibCall;
+    use crate::ir::{entities::UserExternalNameRef, LibCall};
     use alloc::string::ToString;
     use core::u32;
+    use cranelift_entity::EntityRef as _;
 
     #[test]
     fn display_testcase() {
@@ -185,11 +154,17 @@ mod tests {
 
     #[test]
     fn display_user() {
-        assert_eq!(ExternalName::user(0, 0).to_string(), "u0:0");
-        assert_eq!(ExternalName::user(1, 1).to_string(), "u1:1");
         assert_eq!(
-            ExternalName::user(u32::MAX, u32::MAX).to_string(),
-            "u4294967295:4294967295"
+            ExternalName::user(UserExternalNameRef::new(0)).to_string(),
+            "u0"
+        );
+        assert_eq!(
+            ExternalName::user(UserExternalNameRef::new(1)).to_string(),
+            "u1"
+        );
+        assert_eq!(
+            ExternalName::user(UserExternalNameRef::new((u32::MAX - 1) as _)).to_string(),
+            "u4294967294"
         );
     }
 

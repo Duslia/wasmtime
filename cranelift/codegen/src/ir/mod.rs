@@ -28,9 +28,6 @@ pub mod types;
 #[cfg(feature = "enable-serde")]
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "incremental-cache")]
-pub(crate) use crate::ir::extname::TESTCASE_NAME_LENGTH;
-
 pub use crate::ir::atomic_rmw_op::AtomicRmwOp;
 pub use crate::ir::builder::{
     InsertBuilder, InstBuilder, InstBuilderBase, InstInserterBase, ReplaceBuilder,
@@ -40,13 +37,12 @@ pub use crate::ir::dfg::{DataFlowGraph, ValueDef};
 pub use crate::ir::dynamic_type::{DynamicTypeData, DynamicTypes};
 pub use crate::ir::entities::{
     Block, Constant, DynamicStackSlot, DynamicType, FuncRef, GlobalValue, Heap, Immediate, Inst,
-    JumpTable, SigRef, StackSlot, Table, Value,
+    JumpTable, SigRef, StackSlot, Table, UserExternalNameRef, Value,
 };
 pub use crate::ir::extfunc::{
-    AbiParam, ArgumentExtension, ArgumentPurpose, ExtFuncData, ExtFuncDataStencil, Signature,
+    AbiParam, ArgumentExtension, ArgumentPurpose, ExtFuncData, Signature,
 };
-pub use crate::ir::extname::ExternalName;
-pub use crate::ir::extname::ExternalNameStencil;
+pub use crate::ir::extname::{ExternalName, UserExternalName};
 pub use crate::ir::function::{DisplayFunctionAnnotations, Function};
 pub use crate::ir::globalvalue::GlobalValueData;
 pub use crate::ir::heap::{HeapData, HeapStyle};

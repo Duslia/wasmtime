@@ -10,6 +10,7 @@ use crate::ir::{
     Block, DynamicType, FuncRef, Inst, SigRef, Signature, Type, Value, ValueLabelAssignments,
     ValueList, ValueListPool,
 };
+use crate::ir::{ExtFuncData, RelSourceLoc};
 use crate::packed_option::ReservedValue;
 use crate::write::write_operands;
 use core::fmt;
@@ -21,9 +22,6 @@ use core::u16;
 use alloc::collections::BTreeMap;
 #[cfg(feature = "enable-serde")]
 use serde::{Deserialize, Serialize};
-
-use super::RelSourceLoc;
-use super::extfunc::ExtFuncDataStencil;
 
 /// A data flow graph defines all instructions and basic blocks in a function as well as
 /// the data flow dependencies between them. The DFG also tracks values which can be either
@@ -75,7 +73,7 @@ pub struct DataFlowGraph {
     pub old_signatures: SecondaryMap<SigRef, Option<Signature>>,
 
     /// External function references. These are functions that can be called directly.
-    pub ext_funcs: PrimaryMap<FuncRef, ExtFuncDataStencil>,
+    pub ext_funcs: PrimaryMap<FuncRef, ExtFuncData>,
 
     /// Saves Value labels.
     pub values_labels: Option<BTreeMap<Value, ValueLabelAssignments>>,
