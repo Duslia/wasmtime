@@ -92,10 +92,21 @@ impl FunctionParameters {
 
     /// Returns the base `SourceLoc`.
     ///
-    /// Panics if the base source location was never set.
+    /// If it was never explicitly set with `ensure_base_srcloc`, will return an invalid
+    /// `SourceLoc`.
     pub fn base_srcloc(&self) -> SourceLoc {
-        self.base_srcloc
-            .expect("base srcloc must be set at this point")
+        self.base_srcloc.unwrap_or_default()
+    }
+
+    /// Sets the base `SourceLoc`, if not set yet, and returns the base value.
+    pub fn ensure_base_srcloc(&mut self, srcloc: SourceLoc) -> SourceLoc {
+        match self.base_srcloc {
+            Some(val) => val,
+            None => {
+                self.base_srcloc = Some(srcloc);
+                srcloc
+            }
+        }
     }
 
     fn clear(&mut self) {
@@ -357,7 +368,7 @@ impl FunctionStencil {
     }
 
     /// Returns the list of relative source locations for this function.
-    pub fn rel_srclocs(&self) -> &SecondaryMap<Inst, RelSourceLoc> {
+    pub(crate) fn rel_srclocs(&self) -> &SecondaryMap<Inst, RelSourceLoc> {
         &self.srclocs
     }
 }
@@ -392,6 +403,9 @@ impl core::ops::DerefMut for Function {
 
 impl Function {
     /// Create a function with the given name and signature.
+    /// TODO: `name` should probably be a `UserExternalName`, with the resulting `ExternalName`
+    /// being automatically declared with `declare_imported_user_function` to allow recursive calls
+    /// without extra effort.
     pub fn with_name_signature(name: ExternalName, sig: Signature) -> Self {
         Self {
             stencil: FunctionStencil {
@@ -437,20 +451,17 @@ impl Function {
     }
 
     /// Sets an absolute source location for the given instruction.
+    ///
+    /// If no base source location has been set yet, records it at the same time.
     pub fn set_srcloc(&mut self, inst: Inst, srcloc: SourceLoc) {
-        if self.params.base_srcloc.is_none() {
-            self.params.base_srcloc = Some(srcloc);
-        }
-        self.stencil.srclocs[inst] =
-            RelSourceLoc::from_base_offset(self.params.base_srcloc.unwrap(), srcloc);
+        let base = self.params.ensure_base_srcloc(srcloc);
+        self.stencil.srclocs[inst] = RelSourceLoc::from_base_offset(base, srcloc);
     }
 
     /// Returns an absolute source location for the given instruction.
     pub fn srcloc(&self, inst: Inst) -> SourceLoc {
-        self.params
-            .base_srcloc
-            .map(|base| self.stencil.srclocs[inst].expand(base))
-            .unwrap_or_default()
+        let base = self.params.base_srcloc();
+        self.stencil.srclocs[inst].expand(base)
     }
 
     /// Declare a user-defined external function import, to be referenced in `ExtFuncData::User` later.

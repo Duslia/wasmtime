@@ -52,7 +52,7 @@ impl fmt::Display for SourceLoc {
 }
 
 /// Source location relative to another base source location.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "enable-serde", derive(Serialize, Deserialize))]
 pub struct RelSourceLoc(u32);
 
@@ -68,18 +68,32 @@ impl RelSourceLoc {
     ///
     /// Panics if the offset is smaller than the base.
     pub fn from_base_offset(base: SourceLoc, offset: SourceLoc) -> Self {
-        assert!(offset.0 >= base.0);
-        Self(offset.bits() - base.bits())
+        if base.is_default() {
+            Self::default()
+        } else {
+            assert!(offset.0 >= base.0);
+            Self(offset.bits() - base.bits())
+        }
     }
 
     /// Expands the relative source location into an absolute one, using the given base.
     pub fn expand(&self, base: SourceLoc) -> SourceLoc {
-        SourceLoc::new(self.0 + base.bits())
+        if self.is_default() || base.is_default() {
+            Default::default()
+        } else {
+            SourceLoc::new(self.0 + base.bits())
+        }
     }
 
     /// Is this the default relative source location?
     pub fn is_default(self) -> bool {
         self == Default::default()
+    }
+}
+
+impl Default for RelSourceLoc {
+    fn default() -> Self {
+        Self(!0)
     }
 }
 

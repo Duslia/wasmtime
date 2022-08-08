@@ -589,7 +589,7 @@ impl<'f> FuncCursor<'f> {
 
     /// Use the source location of `inst` for future instructions.
     pub fn use_srcloc(&mut self, inst: ir::Inst) {
-        self.srcloc = self.func.stencil.rel_srclocs()[inst].expand(self.func.params.base_srcloc());
+        self.srcloc = self.func.srcloc(inst);
     }
 
     /// Create an instruction builder that inserts an instruction at the current position.
@@ -612,6 +612,7 @@ impl<'f> Cursor for FuncCursor<'f> {
     }
 
     fn set_srcloc(&mut self, srcloc: ir::SourceLoc) {
+        self.func.params.ensure_base_srcloc(srcloc);
         self.srcloc = srcloc;
     }
 
