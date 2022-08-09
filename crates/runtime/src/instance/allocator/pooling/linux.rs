@@ -12,8 +12,8 @@ fn decommit(addr: *mut u8, len: usize, protect: bool) -> Result<()> {
         }
 
         // On Linux, this is enough to cause the kernel to initialize the pages to 0 on next access
-        rustix::io::madvise(addr as _, len, rustix::io::Advice::LinuxDontNeed)
-            .context("madvise failed to decommit: {}")?;
+        // rustix::io::madvise(addr as _, len, rustix::io::Advice::LinuxDontNeed)
+        //     .context("madvise failed to decommit: {}")?;
     }
 
     Ok(())
