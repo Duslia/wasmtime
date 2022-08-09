@@ -1,0 +1,1 @@
+initSidebarItems({"struct":[["DynamicTypeData","A dynamic type object which has a base vector type and a scaling factor."]],"type":[["DynamicTypes","All allocated dynamic types."]]});
